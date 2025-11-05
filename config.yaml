@@ -1,0 +1,42 @@
+# Anomali Tespit Servisi Konfigürasyonu
+
+# Servis Ayarları
+service:
+  name: "anomaly-detector"
+  version: "1.0.0"
+  port: 8000
+  host: "0.0.0.0"
+
+# Anomali Tespit Parametreleri
+anomaly:
+  window_size: 30              # Veri pencere boyutu (gün)
+  z_score_threshold: 2.0       # Z-Score eşik değeri
+  min_data_points: 7           # Minimum veri noktası sayısı
+
+# Logging Ayarları
+logging:
+  level: "INFO"                # DEBUG, INFO, WARNING, ERROR
+  format: "json"               # json veya text
+  file: "logs/anomaly-detector.log"
+
+# CORS Ayarları
+cors:
+  enabled: true
+  allow_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+  allow_methods:
+    - "GET"
+    - "POST"
+    - "PUT"
+    - "DELETE"
+
+# Rate Limiting (opsiyonel)
+rate_limit:
+  enabled: false
+  requests_per_minute: 100
+
+# Monitoring (opsiyonel)
+monitoring:
+  enabled: false
+  prometheus_port: 9090
