@@ -10,9 +10,27 @@ service:
 # Anomali Tespit Parametreleri
 anomaly:
   window_size: 1000              # Veri pencere boyutu (örn: son 1000 okuma)
-  z_score_threshold: 2.0         # Z-Score eşik değeri
+  z_score_threshold: 2.0         # Varsayılan Z-Score eşik değeri
   min_data_points: 10            # İstatistik hesaplamak için minimum veri
   min_training_size: 50          # Alarm üretmek için minimum veri (Eğitim süresi)
+  
+  # Sensör Bazlı Ayarlar (Override)
+  sensors:
+    motor_current:
+      threshold: 2.5
+      min_training_size: 100
+    system_voltage:
+      threshold: 3.0
+      min_training_size: 50
+    acoustic_noise:
+      threshold: 2.2
+      min_training_size: 200
+    vibration_level:
+      threshold: 2.0
+      min_training_size: 200
+    throughput:
+      threshold: 3.0
+      min_training_size: 500
 
 # Logging Ayarları
 logging:

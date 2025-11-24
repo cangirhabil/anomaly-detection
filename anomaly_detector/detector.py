@@ -6,7 +6,7 @@ Z-Score tabanlı istatistiksel anomali tespit sistemi
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 from collections import deque
 
 from .config import AnomalyConfig
@@ -73,6 +73,11 @@ class AnomalyDetector:
         """
         sensor_history = self.history[reading.sensor_type]
         
+        # Sensör bazlı konfigürasyonları al
+        sensor_config = self.config.sensors.get(reading.sensor_type, {})
+        threshold = sensor_config.get('threshold', self.config.z_score_threshold)
+        min_training_size = sensor_config.get('min_training_size', self.config.min_training_size)
+        
         # Yeterli veri yoksa anomali yok
         if len(sensor_history) < self.config.min_data_points:
             return AnomalyResult(
@@ -82,11 +87,12 @@ class AnomalyDetector:
                 mean=reading.value,
                 std_dev=0.0,
                 z_score=0.0,
-                threshold=self.config.z_score_threshold,
+                threshold=threshold,
                 timestamp=reading.timestamp or datetime.now(),
                 severity="Normal",
                 system_status="Initializing",
-                message=f"⚡ Yetersiz veri ({reading.sensor_type}): {len(sensor_history)}/{self.config.min_data_points}"
+                message=f"⚡ Yetersiz veri ({reading.sensor_type}): {len(sensor_history)}/{self.config.min_data_points}",
+                window_size=len(sensor_history)
             )
         
         # İstatistiksel değerleri hesapla
@@ -97,20 +103,20 @@ class AnomalyDetector:
         
         # Sistem durumu kontrolü (Eğitim vs Aktif)
         system_status = "Active"
-        if len(sensor_history) < self.config.min_training_size:
+        if len(sensor_history) < min_training_size:
             system_status = "Learning"
             # Eğitim modunda anomali tespiti yapılmaz (veya sadece loglanır ama alarm verilmez)
             is_anomaly = False
             severity = "Normal"
         else:
             # Anomali kontrolü
-            is_anomaly = abs(z_score) > self.config.z_score_threshold
+            is_anomaly = abs(z_score) > threshold
             
             # Şiddet belirle
             severity = "Normal"
             if is_anomaly:
-                if abs(z_score) > 3.0: severity = "High"
-                elif abs(z_score) > 2.0: severity = "Medium"
+                if abs(z_score) > threshold * 1.5: severity = "High"
+                elif abs(z_score) > threshold: severity = "Medium"
                 else: severity = "Low"
         
         return AnomalyResult(
@@ -120,10 +126,11 @@ class AnomalyDetector:
             mean=mean,
             std_dev=std_dev,
             z_score=z_score,
-            threshold=self.config.z_score_threshold,
+            threshold=threshold,
             timestamp=reading.timestamp or datetime.now(),
             severity=severity,
-            system_status=system_status
+            system_status=system_status,
+            window_size=len(sensor_history)
         )
     
     def _calculate_statistics(self, sensor_type: str) -> Tuple[float, float]:

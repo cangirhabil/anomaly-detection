@@ -67,6 +67,7 @@ class AnomalyResult:
     severity: str = "Normal"
     system_status: str = "Active" # Initializing, Learning, Active
     message: str = ""
+    window_size: int = 0
     
     def __post_init__(self):
         """Mesaj oluştur"""
@@ -74,12 +75,12 @@ class AnomalyResult:
             if self.system_status == "Initializing":
                 self.message = f"⏳ Sistem başlatılıyor... [{self.sensor_type}]"
             elif self.system_status == "Learning":
-                self.message = f"🧠 Sistem öğreniyor... [{self.sensor_type}] ({self.current_value})"
+                self.message = f"🧠 Sistem öğreniyor... [{self.sensor_type}] (Veri: {self.window_size})"
             elif self.is_anomaly:
                 self.message = (
                     f"⚠️ ANOMALİ TESPİT EDİLDİ! [{self.sensor_type}] "
                     f"Değer: {self.current_value}, "
-                    f"Beklenen: {self.mean:.2f} ± {self.std_dev:.2f}, "
+                    f"Ortalama (Son {self.window_size}): {self.mean:.2f}, "
                     f"Z-Score: {self.z_score:.2f}"
                 )
             else:
@@ -102,7 +103,8 @@ class AnomalyResult:
             "timestamp": self.timestamp.isoformat(),
             "severity": self.severity,
             "system_status": self.system_status,
-            "message": self.message
+            "message": self.message,
+            "window_size": self.window_size
         }
     
     def __str__(self) -> str:

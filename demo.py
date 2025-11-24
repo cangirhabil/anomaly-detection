@@ -1,7 +1,119 @@
+
 """
-Anomali Tespit Sistemi - Demo Senaryosu
-Çoklu sensör verisi simülasyonu
+Şişe Sınıflandırma Sistemi - Anomali Tespit Simülasyonu
+Count Sort Sistemi için Sensör Verisi Simülasyonu
 """
+
+import requests
+import time
+import random
+import math
+from datetime import datetime
+
+API_URL = "http://localhost:8000/api/v1"
+
+# Sensör Konfigürasyonları (Simülasyon için)
+SENSORS = {
+    "motor_current": {"base": 5.0, "noise": 0.2, "unit": "A"},      # Motor Akımı
+    "system_voltage": {"base": 24.0, "noise": 0.1, "unit": "V"},    # Sistem Voltajı
+    "acoustic_noise": {"base": 60.0, "noise": 2.0, "unit": "dB"},   # Akustik Gürültü
+    "vibration_level": {"base": 0.5, "noise": 0.05, "unit": "g"},   # Titreşim
+    "throughput": {"base": 1200.0, "noise": 50.0, "unit": "BPM"}    # Şişe Akış Hızı
+}
+
+def print_header(text):
+    print("\n" + "="*60)
+    print(f" {text}")
+    print("="*60)
+
+def send_reading(sensor_type, value, unit=None):
+    payload = {
+        "sensor_type": sensor_type,
+        "value": value,
+        "unit": unit,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    try:
+        response = requests.post(f"{API_URL}/analyze", json=payload)
+        if response.status_code == 200:
+            result = response.json()
+            
+            sys_status = result.get("system_status", "Active")
+            window_size = result.get("window_size", 0)
+            
+            status_icon = "🟢"
+            if result["is_anomaly"]:
+                status_icon = "🔴"
+            elif sys_status == "Learning":
+                status_icon = "🧠"
+            elif sys_status == "Initializing":
+                status_icon = "⏳"
+                
+            print(f"[{status_icon} {sys_status}] {sensor_type:<15}: {value:>6.2f} {unit} | Z: {result['z_score']:>5.2f} | Win: {window_size}")
+            
+            if result["is_anomaly"]:
+                print(f"   └─ ⚠️  ANOMALİ: {result['message']}")
+        else:
+            print(f"❌ Hata: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"❌ Bağlantı hatası: {e}")
+
+def simulate_normal_operation(duration_sec=10):
+    print_header(f"Normal Operasyon Simülasyonu ({duration_sec}s)")
+    start_time = time.time()
+    while time.time() - start_time < duration_sec:
+        for sensor, config in SENSORS.items():
+            # Normal dağılım ile rastgele veri üret
+            value = random.gauss(config["base"], config["noise"])
+            send_reading(sensor, value, config["unit"])
+        time.sleep(0.1) # Hızlı veri akışı
+
+def simulate_anomaly(anomaly_type):
+    print_header(f"Anomali Senaryosu: {anomaly_type}")
+    
+    if anomaly_type == "bottle_jam":
+        # Şişe sıkışması: Motor akımı artar, titreşim artar, akış düşer
+        print("⚠️  Şişe sıkışması simüle ediliyor...")
+        send_reading("motor_current", 8.5, "A")      # Yüksek akım
+        send_reading("vibration_level", 1.5, "g")    # Yüksek titreşim
+        send_reading("throughput", 200, "BPM")       # Düşük akış
+        
+    elif anomaly_type == "broken_bottle":
+        # Kırık şişe: Ani ses artışı
+        print("⚠️  Kırık şişe sesi simüle ediliyor...")
+        send_reading("acoustic_noise", 95.0, "dB")   # Çok yüksek ses
+        
+    elif anomaly_type == "power_fluctuation":
+        # Güç dalgalanması: Voltaj düşüşü
+        print("⚠️  Güç dalgalanması simüle ediliyor...")
+        send_reading("system_voltage", 20.5, "V")    # Düşük voltaj
+
+def main():
+    print_header("Şişe Sınıflandırma Sistemi Başlatılıyor")
+    
+    # 1. Isınma Turu (Veri toplama)
+    print("Veri toplanıyor (Learning Phase)...")
+    simulate_normal_operation(duration_sec=5)
+    
+    # 2. Normal Çalışma
+    print("\nSistem aktif, izleme devam ediyor...")
+    simulate_normal_operation(duration_sec=5)
+    
+    # 3. Anomali Senaryoları
+    simulate_anomaly("bottle_jam")
+    time.sleep(1)
+    simulate_anomaly("broken_bottle")
+    time.sleep(1)
+    simulate_anomaly("power_fluctuation")
+    
+    # 4. Normale Dönüş
+    print("\nNormale dönülüyor...")
+    simulate_normal_operation(duration_sec=3)
+
+if __name__ == "__main__":
+    main()
+
 
 import requests
 import time

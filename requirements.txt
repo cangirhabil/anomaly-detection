@@ -9,3 +9,7 @@ pydantic>=2.0.0
 
 # HTTP requests (for health check)
 requests>=2.31.0
+
+# Configuration
+pyyaml>=6.0
+

@@ -22,8 +22,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from collections import deque, defaultdict
 import logging
 import os
+import yaml
 
 from anomaly_detector import AnomalyDetector, AnomalyConfig
 from anomaly_detector.models import SensorReading, AnomalyResult
@@ -61,16 +63,40 @@ def get_detector() -> AnomalyDetector:
     """Global dedektör instance'ını getir veya oluştur"""
     global _detector
     if _detector is None:
-        # Environment variable'lardan konfigürasyon oku
-        window_size = int(os.getenv("ANOMALY_WINDOW_SIZE", "100"))
-        z_threshold = float(os.getenv("ANOMALY_Z_THRESHOLD", "3.0"))
-        min_points = int(os.getenv("ANOMALY_MIN_POINTS", "10"))
+        config = None
         
-        config = AnomalyConfig(
-            window_size=window_size,
-            z_score_threshold=z_threshold,
-            min_data_points=min_points
-        )
+        # 1. config.yaml'dan okumayı dene
+        try:
+            if os.path.exists("config.yaml"):
+                with open("config.yaml", "r") as f:
+                    yaml_config = yaml.safe_load(f)
+                    anomaly_conf = yaml_config.get("anomaly", {})
+                    
+                    config = AnomalyConfig(
+                        window_size=anomaly_conf.get("window_size", 1000),
+                        z_score_threshold=anomaly_conf.get("z_score_threshold", 2.0),
+                        min_data_points=anomaly_conf.get("min_data_points", 10),
+                        min_training_size=anomaly_conf.get("min_training_size", 50),
+                        sensors=anomaly_conf.get("sensors", {})
+                    )
+                    logger.info("Konfigürasyon config.yaml dosyasından yüklendi")
+        except Exception as e:
+            logger.error(f"config.yaml okunamadı: {e}")
+
+        # 2. Eğer config yüklenemediyse env vars veya default kullan
+        if config is None:
+            # Environment variable'lardan konfigürasyon oku
+            window_size = int(os.getenv("ANOMALY_WINDOW_SIZE", "100"))
+            z_threshold = float(os.getenv("ANOMALY_Z_THRESHOLD", "3.0"))
+            min_points = int(os.getenv("ANOMALY_MIN_POINTS", "10"))
+            
+            config = AnomalyConfig(
+                window_size=window_size,
+                z_score_threshold=z_threshold,
+                min_data_points=min_points
+            )
+            logger.info("Varsayılan konfigürasyon kullanılıyor")
+            
         _detector = AnomalyDetector(config)
         logger.info(f"Anomali dedektörü başlatıldı: {config.to_dict()}")
     

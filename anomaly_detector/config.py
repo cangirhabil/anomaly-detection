@@ -23,9 +23,13 @@ class AnomalyConfig:
     min_data_points: int = 7  # İstatistik hesaplamak için minimum veri
     min_training_size: int = 20 # Alarm üretmeye başlamak için minimum veri (Eğitim süresi)
     alert_message: str = "⚠️ ANOMALİ TESPİT EDİLDİ!"
+    sensors: dict = None
     
     def __post_init__(self):
         """Konfigürasyon değerlerini doğrula"""
+        if self.sensors is None:
+            self.sensors = {}
+
         if self.window_size < 1:
             raise ValueError("window_size en az 1 olmalıdır")
         
@@ -48,6 +52,7 @@ class AnomalyConfig:
             "z_score_threshold": self.z_score_threshold,
             "min_data_points": self.min_data_points,
             "min_training_size": self.min_training_size,
+            "sensors": self.sensors,
             "alert_message": self.alert_message
         }
     
