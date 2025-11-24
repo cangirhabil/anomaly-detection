@@ -1,141 +1,45 @@
-# 🚀 Industrial Sensor Anomaly Detection
+# Endüstriyel Anomali Tespit Sistemi
 
-**Multi-sensor anomaly detection using Z-Score methodology**
+Bu proje, endüstriyel sensör verilerindeki anomalileri tespit etmek için geliştirilmiş tam kapsamlı bir web uygulamasıdır.
 
-Production-ready FastAPI microservice that automatically detects anomalies in industrial sensor data (Vibration, Temperature, Sound, etc.) using Z-Score statistical analysis.
+## Özellikler
 
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-green)](https://fastapi.tiangolo.com/)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue)](https://www.docker.com/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+- **Backend**: Python FastAPI, WebSocket, Z-Score Anomali Tespiti
+- **Frontend**: Next.js 14, Tailwind CSS, shadcn/ui, Recharts
+- **Özellikler**:
+  - Gerçek zamanlı veri akışı (WebSocket)
+  - Canlı grafik izleme
+  - Anomali alarmları
+  - Simülasyon modları (Normal, Şişe Sıkışması, Güç Dalgalanması)
+  - Dinamik konfigürasyon yönetimi
 
-[🇹🇷 Türkçe](README_TR.md) | [📊 Project Info](PROJE_OZETI.md)
+## Kurulum ve Çalıştırma
 
----
+Sistemi çalıştırmak için Docker ve Docker Compose gereklidir.
 
-## ✨ Features
-
-- ✅ **Multi-Sensor Support** - Analyze Vibration (X/Y/Z), Temperature, Sound, Motor Current, Throughput
-- ✅ **Statistical Detection** - Z-Score algorithm for scientific anomaly detection
-- ✅ **REST API** - Unified endpoint for all sensor types
-- ✅ **Plug-and-Play** - Docker one-command deployment
-- ✅ **Language Agnostic** - Python, JavaScript, Java, C#, etc.
-- ✅ **Production-Ready** - Kubernetes, AWS, GCP, Azure support
-- ✅ **Interactive Docs** - Swagger UI for API documentation
-
----
-
-## 🚀 Quick Start
-
-### Docker (Recommended)
+1. Proje dizininde terminali açın.
+2. Aşağıdaki komutu çalıştırın:
 
 ```bash
-docker-compose up -d
-curl http://localhost:8000/api/v1/health
+docker-compose up --build
 ```
 
-### Python
+3. Uygulamalara erişin:
+   - **Dashboard (Frontend)**: [http://localhost:3000](http://localhost:3000)
+   - **API (Backend)**: [http://localhost:8000](http://localhost:8000)
+   - **API Dokümantasyonu**: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-```bash
-pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 8000
-```
+## Geliştirme
 
-**API Docs:** http://localhost:8000/api/docs
+### Backend
+`backend/` klasöründe bulunur.
+- `app.py`: Ana API uygulaması
+- `anomaly_detector/`: Tespit algoritmaları
 
----
+### Frontend
+`frontend/` klasöründe bulunur.
+- `app/page.tsx`: Ana dashboard sayfası
 
-## 💡 Usage
+## Simülasyon
 
-### Python Client Example
-
-```python
-import requests
-
-# Send sensor data
-payload = {
-    "sensor_type": "vibration",
-    "value": 2.5,
-    "unit": "G"
-}
-
-response = requests.post("http://localhost:8000/api/v1/analyze", json=payload)
-result = response.json()
-
-if result["is_anomaly"]:
-    print(f"⚠️ Anomaly Detected! Z-Score: {result['z_score']}")
-```
-
-### REST API
-
-```bash
-# Analyze Vibration Data
-curl -X POST http://localhost:8000/api/v1/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sensor_type": "vibration",
-    "value": 3.5,
-    "unit": "G"
-  }'
-```
-
----
-
-## 📡 API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/analyze` | Analyze and log sensor data |
-| `GET` | `/api/v1/stats` | Get statistics for all sensors |
-| `GET` | `/api/v1/health` | Health check |
-| `POST` | `/api/v1/reset` | Reset system history |
-| `GET` | `/api/v1/history` | Get sensor history |
-| `PUT` | `/api/v1/config` | Update config |
-
----
-
-## 📊 Z-Score Methodology
-
-```
-Z-Score = (X - μ) / σ
-```
-
-| Z-Score | Severity | Confidence |
-|---------|----------|------------|
-| < 2.0 | Normal | 95% |
-| 2.0-3.0 | Medium | 95-99.7% |
-| > 3.0 | High | >99.7% |
-
----
-
-## ⚙️ Configuration
-
-```bash
-ANOMALY_Z_THRESHOLD=3.0      # Z-Score threshold
-ANOMALY_WINDOW_SIZE=100      # Data points to keep
-ANOMALY_MIN_POINTS=10        # Minimum data required
-```
-
----
-
-## 🧪 Testing
-
-```bash
-python demo.py           # Run multi-sensor simulation
-```
-
----
-
-## 📁 Structure
-
-```
-anomaly-detector/
-├── anomaly_detector/    # Core engine
-│   ├── detector.py     # Multi-sensor Z-Score algorithm
-│   ├── config.py       # Configuration
-│   └── models.py       # Data models (SensorReading)
-├── app.py              # FastAPI service
-├── demo.py             # Simulation script
-├── Dockerfile          # Container image
-└── docker-compose.yml  # Orchestration
-```
+Dashboard üzerinden "Trigger Bottle Jam" veya "Power Fluctuation" butonlarını kullanarak sisteme yapay anomali verileri gönderebilir ve sistemin tepkisini test edebilirsiniz.

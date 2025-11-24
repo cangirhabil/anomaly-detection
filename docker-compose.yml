@@ -1,51 +1,20 @@
 version: '3.8'
 
 services:
-  anomaly-detector:
-    build: .
-    container_name: anomaly-detector-service
+  backend:
+    build: ./backend
+    container_name: anomaly-backend
     ports:
       - "8000:8000"
-    environment:
-      # Anomali tespit konfigürasyonu
-      - ANOMALY_WINDOW_SIZE=30
-      - ANOMALY_Z_THRESHOLD=2.0
-      - ANOMALY_MIN_POINTS=7
-      - PORT=8000
-      
-      # Logging
-      - LOG_LEVEL=INFO
-    
+    volumes:
+      - ./backend/config.yaml:/app/config.yaml
     restart: unless-stopped
-    
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    
-    # Resource limits (opsiyonel)
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 512M
-        reservations:
-          cpus: '0.5'
-          memory: 256M
-    
-    # Logging driver
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    
-    # Network
-    networks:
-      - anomaly-network
 
-networks:
-  anomaly-network:
-    driver: bridge
+  frontend:
+    build: ./frontend
+    container_name: anomaly-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
