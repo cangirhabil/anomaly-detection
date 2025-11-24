@@ -6,7 +6,7 @@ Kullanım:
     from anomaly_client import AnomalyClient
     
     client = AnomalyClient("http://localhost:8000")
-    result = client.log_error(25)
+    result = client.analyze(sensor_type="vibration", value=2.5, unit="G")
     
     if result.is_anomaly:
         send_alert(result.message)
@@ -22,14 +22,15 @@ from datetime import datetime
 class AnomalyResult:
     """Anomali tespit sonucu"""
     is_anomaly: bool
-    current_value: int
+    sensor_type: str
+    current_value: float
     mean: float
     std_dev: float
     z_score: float
     threshold: float
     message: str
-    date: str
     timestamp: str
+    severity: str
     
     @classmethod
     def from_dict(cls, data: Dict) -> 'AnomalyResult':
@@ -40,14 +41,8 @@ class AnomalyResult:
 @dataclass
 class Stats:
     """İstatistik bilgileri"""
-    data_points: int
-    mean: float
-    std_dev: float
-    min: int
-    max: int
-    latest: Optional[int]
-    threshold: float
-    window_size: int
+    total_sensors: int
+    sensors: Dict[str, Any]
     timestamp: str
     
     @classmethod
@@ -63,14 +58,13 @@ class AnomalyClient:
     Kullanım:
         client = AnomalyClient("http://localhost:8000")
         
-        # Hata ekle ve kontrol et
-        result = client.log_error(25)
+        # Veri analiz et
+        result = client.analyze("temperature", 85.5, "C")
         if result.is_anomaly:
             print("Anomali tespit edildi!")
         
         # İstatistikleri al
         stats = client.get_stats()
-        print(f"Ortalama: {stats.mean}")
     """
     
     def __init__(
@@ -141,58 +135,34 @@ class AnomalyClient:
         """
         return self._request("GET", "/api/v1/health")
     
-    def log_error(
+    def analyze(
         self,
-        error_count: int,
-        date: Optional[str] = None
+        sensor_type: str,
+        value: float,
+        unit: Optional[str] = None,
+        timestamp: Optional[str] = None
     ) -> AnomalyResult:
         """
-        Hata logu ekle ve anomali kontrolü yap
+        Sensör verisini analiz et ve kaydet
         
         Args:
-            error_count: Günlük hata sayısı
-            date: Tarih (ISO format, opsiyonel)
+            sensor_type: Sensör tipi (örn: vibration)
+            value: Okunan değer
+            unit: Birim (örn: G)
+            timestamp: Zaman damgası (ISO format, opsiyonel)
         
         Returns:
             Anomali tespit sonucu
-        
-        Example:
-            >>> result = client.log_error(25)
-            >>> if result.is_anomaly:
-            ...     print(f"Anomali! Z-Score: {result.z_score}")
         """
-        data = {"error_count": error_count}
-        if date:
-            data["date"] = date
+        data = {
+            "sensor_type": sensor_type,
+            "value": value,
+            "unit": unit
+        }
+        if timestamp:
+            data["timestamp"] = timestamp
         
-        response = self._request("POST", "/api/v1/log", json_data=data)
-        return AnomalyResult.from_dict(response)
-    
-    def detect_anomaly(
-        self,
-        value: int,
-        date: Optional[str] = None
-    ) -> AnomalyResult:
-        """
-        Anomali kontrolü yap (geçmişe eklenmez)
-        What-if analizi için kullanılır
-        
-        Args:
-            value: Kontrol edilecek değer
-            date: Tarih (ISO format, opsiyonel)
-        
-        Returns:
-            Anomali tespit sonucu
-        
-        Example:
-            >>> result = client.detect_anomaly(30)
-            >>> print(f"30 hata anomali mi? {result.is_anomaly}")
-        """
-        data = {"value": value}
-        if date:
-            data["date"] = date
-        
-        response = self._request("POST", "/api/v1/detect", json_data=data)
+        response = self._request("POST", "/api/v1/analyze", json_data=data)
         return AnomalyResult.from_dict(response)
     
     def get_stats(self) -> Stats:
@@ -201,10 +171,6 @@ class AnomalyClient:
         
         Returns:
             İstatistik bilgileri
-        
-        Example:
-            >>> stats = client.get_stats()
-            >>> print(f"Ortalama: {stats.mean}, Std: {stats.std_dev}")
         """
         response = self._request("GET", "/api/v1/stats")
         return Stats.from_dict(response)
@@ -234,9 +200,6 @@ class AnomalyClient:
         
         Returns:
             Güncellenmiş konfigürasyon
-        
-        Example:
-            >>> client.update_config(z_score_threshold=2.5)
         """
         data = {}
         if window_size is not None:
@@ -248,27 +211,22 @@ class AnomalyClient:
         
         return self._request("PUT", "/api/v1/config", json_data=data)
     
-    def get_history(self, limit: Optional[int] = None) -> List[Dict]:
+    def get_history(self, limit: Optional[int] = None) -> Dict[str, List[Dict]]:
         """
         Veri geçmişini al
         
         Args:
-            limit: Maksimum kayıt sayısı
+            limit: Maksimum kayıt sayısı (opsiyonel)
         
         Returns:
-            Geçmiş kayıtlar listesi
-        
-        Example:
-            >>> history = client.get_history(limit=10)
-            >>> for record in history:
-            ...     print(f"{record['date']}: {record['error_count']}")
+            Geçmiş kayıtlar (sensör bazlı)
         """
         params = {}
         if limit:
             params["limit"] = limit
         
         response = self._request("GET", "/api/v1/history", params=params)
-        return response.get("data", [])
+        return response.get("data", {})
     
     def reset(self) -> Dict:
         """
@@ -276,9 +234,6 @@ class AnomalyClient:
         
         Returns:
             Başarı mesajı
-        
-        Warning:
-            Bu işlem geri alınamaz!
         """
         return self._request("POST", "/api/v1/reset")
     
@@ -294,31 +249,6 @@ class AnomalyClient:
             return health.get("status") == "healthy"
         except Exception:
             return False
-    
-    def wait_until_ready(self, max_wait: int = 60) -> bool:
-        """
-        Servis hazır olana kadar bekle
-        
-        Args:
-            max_wait: Maksimum bekleme süresi (saniye)
-        
-        Returns:
-            True ise hazır, False ise timeout
-        """
-        import time
-        
-        start_time = time.time()
-        while time.time() - start_time < max_wait:
-            try:
-                health = self.health_check()
-                if health.get("ready"):
-                    return True
-            except Exception:
-                pass
-            
-            time.sleep(1)
-        
-        return False
 
 
 # ============================================================================
@@ -343,38 +273,23 @@ def example_usage():
         print("   ❌ Servis çalışmıyor!")
         return
     
-    # 2. İstatistikler
-    print("\n2. Mevcut İstatistikler:")
-    stats = client.get_stats()
-    print(f"   Veri Sayısı: {stats.data_points}")
-    print(f"   Ortalama: {stats.mean:.2f}")
-    print(f"   Std Sapma: {stats.std_dev:.2f}")
-    
-    # 3. Normal hata ekle
-    print("\n3. Normal Hata Ekleme:")
-    result = client.log_error(18)
-    print(f"   18 hata → Anomali: {result.is_anomaly}")
+    # 2. Normal veri ekle
+    print("\n2. Normal Veri Ekleme:")
+    result = client.analyze("vibration", 1.2, "G")
+    print(f"   Vibration: 1.2 G → Anomali: {result.is_anomaly}")
     print(f"   Z-Score: {result.z_score:.2f}")
     
-    # 4. Anormal hata ekle
-    print("\n4. Anormal Hata Ekleme:")
-    result = client.log_error(35)
-    print(f"   35 hata → Anomali: {result.is_anomaly}")
+    # 3. Anormal veri ekle
+    print("\n3. Anormal Veri Ekleme:")
+    result = client.analyze("vibration", 4.5, "G")
+    print(f"   Vibration: 4.5 G → Anomali: {result.is_anomaly}")
     if result.is_anomaly:
         print(f"   ⚠️  {result.message}")
     
-    # 5. What-if analizi
-    print("\n5. What-If Analizi:")
-    for value in [20, 25, 30, 40]:
-        result = client.detect_anomaly(value)
-        status = "🔴 ANOMALİ" if result.is_anomaly else "🟢 Normal"
-        print(f"   {value} hata → Z={result.z_score:5.2f} → {status}")
-    
-    # 6. Geçmiş
-    print("\n6. Son 5 Kayıt:")
-    history = client.get_history(limit=5)
-    for i, record in enumerate(history, 1):
-        print(f"   {i}. {record['error_count']} hata")
+    # 4. İstatistikler
+    print("\n4. Mevcut İstatistikler:")
+    stats = client.get_stats()
+    print(f"   Aktif Sensörler: {stats.total_sensors}")
     
     print("\n" + "=" * 60)
     print("✅ TÜM İŞLEMLER TAMAMLANDI")

@@ -9,9 +9,10 @@ service:
 
 # Anomali Tespit Parametreleri
 anomaly:
-  window_size: 30              # Veri pencere boyutu (gün)
-  z_score_threshold: 2.0       # Z-Score eşik değeri
-  min_data_points: 7           # Minimum veri noktası sayısı
+  window_size: 1000              # Veri pencere boyutu (örn: son 1000 okuma)
+  z_score_threshold: 2.0         # Z-Score eşik değeri
+  min_data_points: 10            # İstatistik hesaplamak için minimum veri
+  min_training_size: 50          # Alarm üretmek için minimum veri (Eğitim süresi)
 
 # Logging Ayarları
 logging:

@@ -10,25 +10,26 @@ from typing import List, Optional, Tuple
 from collections import deque
 
 from .config import AnomalyConfig
-from .models import ErrorLog, AnomalyResult
+from .models import SensorReading, AnomalyResult
+from collections import defaultdict
 
 
 class AnomalyDetector:
     """
-    Z-Score yöntemi ile anomali tespiti yapan ana sınıf
+    Z-Score yöntemi ile çoklu sensör anomali tespiti yapan ana sınıf
     
-    Bu sınıf, günlük hata sayılarını izler ve istatistiksel olarak
+    Bu sınıf, sensör verilerini izler ve istatistiksel olarak
     beklenen aralığın dışında kalan değerleri tespit eder.
     
     Çalışma Prensibi:
-    1. Son N günün hata verisi tutulur (varsayılan: 30 gün)
-    2. Her yeni veri için ortalama ve standart sapma hesaplanır
+    1. Her sensör tipi için son N veri tutulur
+    2. Her yeni veri için o sensör tipine ait ortalama ve standart sapma hesaplanır
     3. Z-Score = (X - μ) / σ formülü ile sapma ölçülür
     4. Z-Score > eşik ise anomali kabul edilir
     
     Attributes:
         config: Anomali tespit konfigürasyonu
-        error_history: Hata geçmişi (deque ile sınırlı boyut)
+        history: Sensör geçmişi (sensor_type -> deque)
     """
     
     def __init__(self, config: Optional[AnomalyConfig] = None):
@@ -39,90 +40,106 @@ class AnomalyDetector:
             config: Konfigürasyon objesi (None ise varsayılan kullanılır)
         """
         self.config = config or AnomalyConfig()
-        self.error_history: deque[ErrorLog] = deque(maxlen=self.config.window_size)
+        # Her sensör tipi için ayrı bir deque tutuyoruz
+        self.history = defaultdict(lambda: deque(maxlen=self.config.window_size))
     
-    def add_error_log(self, error_count: int, date: Optional[datetime] = None) -> AnomalyResult:
+    def add_reading(self, reading: SensorReading) -> AnomalyResult:
         """
-        Yeni hata logu ekle ve anomali kontrolü yap
+        Yeni sensör verisi ekle ve anomali kontrolü yap
         
         Args:
-            error_count: Günlük hata sayısı
-            date: Hata tarihi (None ise bugün)
+            reading: Sensör okuma verisi
         
         Returns:
             AnomalyResult: Anomali tespit sonucu
         """
-        if date is None:
-            date = datetime.now()
-        
-        # Yeni hata logu oluştur
-        error_log = ErrorLog(date=date, error_count=error_count)
-        
         # Anomali kontrolü yap (geçmiş verilere göre)
-        result = self.detect_anomaly(error_count, date)
+        result = self.detect(reading)
         
         # Geçmişe ekle (kontrol sonrasında ekleniyor ki mevcut veri analizi etkilemesin)
-        self.error_history.append(error_log)
+        self.history[reading.sensor_type].append(reading)
         
         return result
     
-    def detect_anomaly(self, current_value: int, date: Optional[datetime] = None) -> AnomalyResult:
+    def detect(self, reading: SensorReading) -> AnomalyResult:
         """
         Mevcut değer için anomali tespiti yap
         
         Args:
-            current_value: Kontrol edilecek hata sayısı
-            date: Analiz tarihi
+            reading: Sensör okuma verisi
         
         Returns:
             AnomalyResult: Anomali tespit sonucu
         """
-        if date is None:
-            date = datetime.now()
+        sensor_history = self.history[reading.sensor_type]
         
         # Yeterli veri yoksa anomali yok
-        if len(self.error_history) < self.config.min_data_points:
+        if len(sensor_history) < self.config.min_data_points:
             return AnomalyResult(
                 is_anomaly=False,
-                current_value=current_value,
-                mean=current_value,
+                sensor_type=reading.sensor_type,
+                current_value=reading.value,
+                mean=reading.value,
                 std_dev=0.0,
                 z_score=0.0,
                 threshold=self.config.z_score_threshold,
-                date=date,
-                message=f"⚡ Yetersiz veri: {len(self.error_history)}/{self.config.min_data_points} - Normal kabul edildi"
+                timestamp=reading.timestamp or datetime.now(),
+                severity="Normal",
+                system_status="Initializing",
+                message=f"⚡ Yetersiz veri ({reading.sensor_type}): {len(sensor_history)}/{self.config.min_data_points}"
             )
         
         # İstatistiksel değerleri hesapla
-        mean, std_dev = self._calculate_statistics()
+        mean, std_dev = self._calculate_statistics(reading.sensor_type)
         
         # Z-Score hesapla
-        z_score = self._calculate_z_score(current_value, mean, std_dev)
+        z_score = self._calculate_z_score(reading.value, mean, std_dev)
         
-        # Anomali kontrolü
-        is_anomaly = abs(z_score) > self.config.z_score_threshold
+        # Sistem durumu kontrolü (Eğitim vs Aktif)
+        system_status = "Active"
+        if len(sensor_history) < self.config.min_training_size:
+            system_status = "Learning"
+            # Eğitim modunda anomali tespiti yapılmaz (veya sadece loglanır ama alarm verilmez)
+            is_anomaly = False
+            severity = "Normal"
+        else:
+            # Anomali kontrolü
+            is_anomaly = abs(z_score) > self.config.z_score_threshold
+            
+            # Şiddet belirle
+            severity = "Normal"
+            if is_anomaly:
+                if abs(z_score) > 3.0: severity = "High"
+                elif abs(z_score) > 2.0: severity = "Medium"
+                else: severity = "Low"
         
         return AnomalyResult(
             is_anomaly=is_anomaly,
-            current_value=current_value,
+            sensor_type=reading.sensor_type,
+            current_value=reading.value,
             mean=mean,
             std_dev=std_dev,
             z_score=z_score,
             threshold=self.config.z_score_threshold,
-            date=date
+            timestamp=reading.timestamp or datetime.now(),
+            severity=severity,
+            system_status=system_status
         )
     
-    def _calculate_statistics(self) -> Tuple[float, float]:
+    def _calculate_statistics(self, sensor_type: str) -> Tuple[float, float]:
         """
         Geçmiş verilerden istatistiksel değerleri hesapla
         
         Returns:
             Tuple[float, float]: (ortalama, standart sapma)
         """
-        error_counts = [log.error_count for log in self.error_history]
+        readings = [r.value for r in self.history[sensor_type]]
         
-        mean = np.mean(error_counts)
-        std_dev = np.std(error_counts, ddof=1)  # Örnek standart sapma (n-1)
+        if not readings:
+            return 0.0, 0.0
+            
+        mean = np.mean(readings)
+        std_dev = np.std(readings, ddof=1)  # Örnek standart sapma (n-1)
         
         # Standart sapma 0 ise küçük bir değer kullan (bölme hatasını önle)
         if std_dev == 0:
@@ -130,7 +147,7 @@ class AnomalyDetector:
         
         return float(mean), float(std_dev)
     
-    def _calculate_z_score(self, value: int, mean: float, std_dev: float) -> float:
+    def _calculate_z_score(self, value: float, mean: float, std_dev: float) -> float:
         """
         Z-Score hesapla
         
@@ -148,74 +165,47 @@ class AnomalyDetector:
     
     def get_statistics_summary(self) -> dict:
         """
-        Mevcut istatistiklerin özetini al
+        Mevcut istatistiklerin özetini al (Tüm sensörler için)
         
         Returns:
             dict: İstatistik özet bilgileri
         """
-        if len(self.error_history) == 0:
-            return {
-                "data_points": 0,
-                "mean": 0.0,
-                "std_dev": 0.0,
-                "min": 0,
-                "max": 0,
-                "latest": None
-            }
-        
-        error_counts = [log.error_count for log in self.error_history]
-        mean, std_dev = self._calculate_statistics()
-        
-        return {
-            "data_points": len(self.error_history),
-            "mean": round(mean, 2),
-            "std_dev": round(std_dev, 2),
-            "min": min(error_counts),
-            "max": max(error_counts),
-            "latest": error_counts[-1] if error_counts else None,
-            "threshold": self.config.z_score_threshold,
-            "window_size": self.config.window_size
+        summary = {
+            "total_sensors": len(self.history),
+            "sensors": {}
         }
-    
-    def get_history_dataframe(self) -> pd.DataFrame:
-        """
-        Hata geçmişini pandas DataFrame olarak al
         
-        Returns:
-            pd.DataFrame: Hata geçmişi
-        """
-        if len(self.error_history) == 0:
-            return pd.DataFrame(columns=["date", "error_count"])
-        
-        data = [
-            {"date": log.date, "error_count": log.error_count}
-            for log in self.error_history
-        ]
-        
-        df = pd.DataFrame(data)
-        df['date'] = pd.to_datetime(df['date'])
-        return df
-    
-    def load_historical_data(self, data: List[Tuple[datetime, int]]):
-        """
-        Geçmiş veriyi toplu yükle
-        
-        Args:
-            data: (tarih, hata_sayısı) tuple listesi
-        """
-        for date, error_count in data:
-            error_log = ErrorLog(date=date, error_count=error_count)
-            self.error_history.append(error_log)
+        for sensor_type, readings in self.history.items():
+            if not readings:
+                continue
+                
+            values = [r.value for r in readings]
+            mean = np.mean(values)
+            std_dev = np.std(values, ddof=1) if len(values) > 1 else 0.0
+            
+            summary["sensors"][sensor_type] = {
+                "data_points": len(readings),
+                "mean": round(float(mean), 2),
+                "std_dev": round(float(std_dev), 2),
+                "min": min(values),
+                "max": max(values),
+                "latest": values[-1]
+            }
+            
+        return summary
     
     def clear_history(self):
         """Tüm geçmiş veriyi temizle"""
-        self.error_history.clear()
+        self.history.clear()
     
-    def export_history(self) -> List[dict]:
+    def export_history(self) -> Dict[str, List[dict]]:
         """
         Geçmişi JSON formatında dışa aktar
         
         Returns:
-            List[dict]: Hata geçmişi
+            Dict[str, List[dict]]: Sensör bazlı geçmiş
         """
-        return [log.to_dict() for log in self.error_history]
+        export = {}
+        for sensor_type, readings in self.history.items():
+            export[sensor_type] = [r.to_dict() for r in readings]
+        return export

@@ -26,6 +26,7 @@ import logging
 import os
 
 from anomaly_detector import AnomalyDetector, AnomalyConfig
+from anomaly_detector.models import SensorReading, AnomalyResult
 
 # Logging yapılandırması
 logging.basicConfig(
@@ -36,9 +37,9 @@ logger = logging.getLogger(__name__)
 
 # FastAPI uygulaması
 app = FastAPI(
-    title="Anomali Tespit Mikroservisi",
-    description="Z-Score tabanlı istatistiksel anomali tespit REST API",
-    version="1.0.0",
+    title="Endüstriyel Anomali Tespit Servisi",
+    description="Çoklu sensör verisi için Z-Score tabanlı anomali tespiti",
+    version="2.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
@@ -61,9 +62,9 @@ def get_detector() -> AnomalyDetector:
     global _detector
     if _detector is None:
         # Environment variable'lardan konfigürasyon oku
-        window_size = int(os.getenv("ANOMALY_WINDOW_SIZE", "30"))
-        z_threshold = float(os.getenv("ANOMALY_Z_THRESHOLD", "2.0"))
-        min_points = int(os.getenv("ANOMALY_MIN_POINTS", "7"))
+        window_size = int(os.getenv("ANOMALY_WINDOW_SIZE", "100"))
+        z_threshold = float(os.getenv("ANOMALY_Z_THRESHOLD", "3.0"))
+        min_points = int(os.getenv("ANOMALY_MIN_POINTS", "10"))
         
         config = AnomalyConfig(
             window_size=window_size,
@@ -80,52 +81,18 @@ def get_detector() -> AnomalyDetector:
 # PYDANTIC MODELLER (Request/Response)
 # ============================================================================
 
-class DetectRequest(BaseModel):
-    """Anomali kontrol isteği"""
-    value: int = Field(..., ge=0, description="Kontrol edilecek hata sayısı")
-    date: Optional[str] = Field(None, description="Tarih (ISO format)")
-    
-    @validator('value')
-    def validate_value(cls, v):
-        if v < 0:
-            raise ValueError('Hata sayısı negatif olamaz')
-        return v
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "value": 25,
-                "date": "2025-11-05T10:30:00"
-            }
-        }
-
-
-class LogRequest(BaseModel):
-    """Hata logu ekleme isteği"""
-    error_count: int = Field(..., ge=0, description="Günlük hata sayısı")
-    date: Optional[str] = Field(None, description="Tarih (ISO format)")
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "error_count": 18,
-                "date": "2025-11-05"
-            }
-        }
-
-
 class ConfigUpdateRequest(BaseModel):
     """Konfigürasyon güncelleme isteği"""
-    window_size: Optional[int] = Field(None, ge=1, le=365)
+    window_size: Optional[int] = Field(None, ge=1, le=1000)
     z_score_threshold: Optional[float] = Field(None, gt=0, le=10)
     min_data_points: Optional[int] = Field(None, ge=2, le=100)
     
     class Config:
         schema_extra = {
             "example": {
-                "window_size": 30,
-                "z_score_threshold": 2.5,
-                "min_data_points": 7
+                "window_size": 100,
+                "z_score_threshold": 3.0,
+                "min_data_points": 10
             }
         }
 
@@ -133,26 +100,21 @@ class ConfigUpdateRequest(BaseModel):
 class AnomalyResponse(BaseModel):
     """Anomali tespit yanıtı"""
     is_anomaly: bool
-    current_value: int
+    sensor_type: str
+    current_value: float
     mean: float
     std_dev: float
     z_score: float
     threshold: float
-    date: str
+    timestamp: str
+    severity: str
     message: str
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
 class StatsResponse(BaseModel):
     """İstatistik yanıtı"""
-    data_points: int
-    mean: float
-    std_dev: float
-    min: int
-    max: int
-    latest: Optional[int]
-    threshold: float
-    window_size: int
+    total_sensors: int
+    sensors: Dict[str, Any]
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
@@ -160,8 +122,7 @@ class HealthResponse(BaseModel):
     """Sağlık kontrolü yanıtı"""
     status: str
     version: str
-    data_points: int
-    ready: bool
+    active_sensors: int
     uptime_seconds: Optional[float] = None
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
@@ -174,8 +135,8 @@ class HealthResponse(BaseModel):
 async def root():
     """Kök endpoint - API bilgileri"""
     return {
-        "service": "Anomali Tespit Mikroservisi",
-        "version": "1.0.0",
+        "service": "Endüstriyel Anomali Tespit Servisi",
+        "version": "2.0.0",
         "status": "running",
         "docs": "/api/docs",
         "health": "/api/v1/health"
@@ -196,9 +157,8 @@ async def health_check():
         
         return HealthResponse(
             status="healthy",
-            version="1.0.0",
-            data_points=stats["data_points"],
-            ready=stats["data_points"] >= detector.config.min_data_points
+            version="2.0.0",
+            active_sensors=stats["total_sensors"]
         )
     except Exception as e:
         logger.error(f"Health check hatası: {e}")
@@ -208,13 +168,13 @@ async def health_check():
         )
 
 
-@app.post("/api/v1/detect", response_model=AnomalyResponse, tags=["Detection"])
-async def detect_anomaly(request: DetectRequest):
+@app.post("/api/v1/analyze", response_model=AnomalyResponse, tags=["Detection"])
+async def analyze_sensor_data(reading: SensorReading):
     """
-    Anomali tespiti yap (geçmişe eklenmeden)
+    Sensör verisini analiz et ve kaydet
     
     Args:
-        request: Kontrol edilecek değer ve tarih
+        reading: Sensör okuma verisi
     
     Returns:
         Anomali tespit sonucu
@@ -222,55 +182,19 @@ async def detect_anomaly(request: DetectRequest):
     try:
         detector = get_detector()
         
-        # Tarih parse
-        date = datetime.fromisoformat(request.date) if request.date else datetime.now()
+        # Analiz et ve kaydet
+        result = detector.add_reading(reading)
         
-        # Anomali kontrolü
-        result = detector.detect_anomaly(request.value, date)
-        
-        logger.info(f"Anomali kontrolü: value={request.value}, anomaly={result.is_anomaly}, z={result.z_score:.2f}")
-        
-        return AnomalyResponse(**result.to_dict())
-        
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:
-        logger.error(f"Anomali tespit hatası: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-@app.post("/api/v1/log", response_model=AnomalyResponse, tags=["Detection"])
-async def log_error(request: LogRequest):
-    """
-    Hata logu ekle ve anomali kontrolü yap
-    
-    Args:
-        request: Hata sayısı ve tarih
-    
-    Returns:
-        Anomali tespit sonucu
-    """
-    try:
-        detector = get_detector()
-        
-        # Tarih parse
-        date = datetime.fromisoformat(request.date) if request.date else datetime.now()
-        
-        # Hata ekle ve kontrol et
-        result = detector.add_error_log(request.error_count, date)
-        
-        logger.info(f"Hata eklendi: count={request.error_count}, anomaly={result.is_anomaly}")
-        
-        # Anomali varsa uyarı
+        # Loglama
         if result.is_anomaly:
-            logger.warning(f"🚨 ANOMALİ TESPİT EDİLDİ: {result.message}")
+            logger.warning(f"🚨 ANOMALİ: {result.message}")
+        else:
+            logger.info(f"Normal: {reading.sensor_type}={reading.value}")
         
         return AnomalyResponse(**result.to_dict())
         
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        logger.error(f"Hata loglama hatası: {e}")
+        logger.error(f"Analiz hatası: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
@@ -340,10 +264,19 @@ async def update_config(request: ConfigUpdateRequest):
         new_config = AnomalyConfig(**current_config)
         new_detector = AnomalyDetector(new_config)
         
-        # Geçmiş veriyi aktar
-        if detector.error_history:
-            historical_data = [(log.date, log.error_count) for log in detector.error_history]
-            new_detector.load_historical_data(historical_data)
+        # Geçmiş veriyi aktar (Dictionary yapısı olduğu için biraz farklı)
+        # Basitlik için geçmişi sıfırlıyoruz veya manuel aktarım yapılabilir
+        # Burada geçmişi korumak için eski detector'un history'sini kopyalıyoruz
+        new_detector.history = detector.history
+        # Ancak deque boyutu değişmiş olabilir, bu yüzden yeniden oluşturmak daha güvenli
+        # Şimdilik basitçe yeni config ile devam ediyoruz, history korunuyor (referans olarak)
+        # Ama deque maxlen değişmeyeceği için, history'yi yeniden oluşturmak lazım
+        
+        # History'yi yeniden oluştur
+        new_detector.history = defaultdict(lambda: deque(maxlen=new_config.window_size))
+        for sensor_type, readings in detector.history.items():
+            for reading in readings:
+                new_detector.history[sensor_type].append(reading)
         
         _detector = new_detector
         
@@ -384,12 +317,9 @@ async def reset_system():
 
 
 @app.get("/api/v1/history", tags=["Statistics"])
-async def get_history(limit: Optional[int] = None):
+async def get_history():
     """
     Veri geçmişini getir
-    
-    Args:
-        limit: Maksimum kayıt sayısı (opsiyonel)
     
     Returns:
         Geçmiş veriler
@@ -398,11 +328,8 @@ async def get_history(limit: Optional[int] = None):
         detector = get_detector()
         history = detector.export_history()
         
-        if limit and limit > 0:
-            history = history[-limit:]
-        
         return {
-            "total": len(history),
+            "total_sensors": len(history),
             "data": history,
             "timestamp": datetime.now().isoformat()
         }

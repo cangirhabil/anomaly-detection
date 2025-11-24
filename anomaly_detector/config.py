@@ -20,7 +20,8 @@ class AnomalyConfig:
     """
     window_size: int = 30  # Son 30 gün
     z_score_threshold: float = 2.0  # 95% güven aralığı için 2.0, 99.7% için 3.0
-    min_data_points: int = 7  # En az 1 haftalık veri gerekli
+    min_data_points: int = 7  # İstatistik hesaplamak için minimum veri
+    min_training_size: int = 20 # Alarm üretmeye başlamak için minimum veri (Eğitim süresi)
     alert_message: str = "⚠️ ANOMALİ TESPİT EDİLDİ!"
     
     def __post_init__(self):
@@ -33,6 +34,9 @@ class AnomalyConfig:
         
         if self.min_data_points < 2:
             raise ValueError("min_data_points en az 2 olmalıdır")
+            
+        if self.min_training_size < self.min_data_points:
+            raise ValueError("min_training_size, min_data_points'ten küçük olamaz")
         
         if self.min_data_points > self.window_size:
             raise ValueError("min_data_points, window_size'dan büyük olamaz")
@@ -43,6 +47,7 @@ class AnomalyConfig:
             "window_size": self.window_size,
             "z_score_threshold": self.z_score_threshold,
             "min_data_points": self.min_data_points,
+            "min_training_size": self.min_training_size,
             "alert_message": self.alert_message
         }
     
