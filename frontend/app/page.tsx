@@ -9,9 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
-  Area, ComposedChart, Pie, PieChart, Cell
+  Area, ComposedChart, Pie, PieChart, Cell, BarChart, Bar, ReferenceLine, ScatterChart, Scatter, ZAxis
 } from 'recharts';
-import { Activity, AlertTriangle, Settings, RefreshCw, Database, Gauge, PieChart as PieIcon, Wifi, WifiOff, TrendingUp, Clock, Zap } from 'lucide-react';
+import { Activity, AlertTriangle, Settings, RefreshCw, Database, Gauge, PieChart as PieIcon, Wifi, WifiOff, TrendingUp, Clock, Zap, BarChart3, Table2, TrendingDown, Target } from 'lucide-react';
 
 interface ReadingData {
   is_anomaly: boolean;
@@ -65,7 +65,28 @@ interface SensorStats {
     is_anomaly: boolean;
     count: number;
     unit?: string;
+    min?: number;
+    max?: number;
+    sum?: number;
+    anomaly_count?: number;
+    values?: number[];
   };
+}
+
+interface ZScoreTableData {
+  sensor: string;
+  current_value: number;
+  z_score: number;
+  mean: number;
+  std_dev: number;
+  status: 'normal' | 'warning' | 'critical';
+  unit?: string;
+}
+
+interface ZScoreDistribution {
+  range: string;
+  count: number;
+  color: string;
 }
 
 interface Config {
@@ -171,16 +192,25 @@ export default function Dashboard() {
               });
             }
             
-            setSensorStats(prev => ({
-              ...prev,
-              [reading.sensor_type]: {
-                current: reading.current_value,
-                z_score: reading.z_score,
-                is_anomaly: reading.is_anomaly,
-                count: (prev[reading.sensor_type]?.count || 0) + 1,
-                unit: reading.unit
-              }
-            }));
+            setSensorStats(prev => {
+              const existing = prev[reading.sensor_type];
+              const newValues = [...(existing?.values || []), reading.current_value].slice(-100);
+              return {
+                ...prev,
+                [reading.sensor_type]: {
+                  current: reading.current_value,
+                  z_score: reading.z_score,
+                  is_anomaly: reading.is_anomaly,
+                  count: (existing?.count || 0) + 1,
+                  unit: reading.unit,
+                  min: Math.min(existing?.min ?? reading.current_value, reading.current_value),
+                  max: Math.max(existing?.max ?? reading.current_value, reading.current_value),
+                  sum: (existing?.sum || 0) + reading.current_value,
+                  anomaly_count: (existing?.anomaly_count || 0) + (reading.is_anomaly ? 1 : 0),
+                  values: newValues
+                }
+              };
+            });
 
             const time = new Date(reading.timestamp).toLocaleTimeString('tr-TR');
             const newPoint: ChartDataPoint = {
@@ -654,6 +684,315 @@ export default function Dashboard() {
                   </CardContent>
                 </Card>
               </div>
+            </div>
+
+            {/* Z-Score Analysis Section */}
+            <div className="grid gap-6 lg:grid-cols-2">
+              {/* Z-Score Summary Table */}
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardHeader>
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <Table2 className="h-5 w-5 text-blue-400" />
+                    Z-Score Özet Tablosu
+                  </CardTitle>
+                  <CardDescription className="text-slate-400">
+                    Tüm sensörlerin anlık Z-Score değerleri ve durumları
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {Object.keys(sensorStats).length === 0 ? (
+                    <div className="py-8 text-center">
+                      <Table2 className="mx-auto h-10 w-10 text-slate-600" />
+                      <p className="mt-2 text-slate-500">Veri bekleniyor...</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-700">
+                            <th className="px-3 py-2 text-left font-medium text-slate-400">Sensör</th>
+                            <th className="px-3 py-2 text-right font-medium text-slate-400">Değer</th>
+                            <th className="px-3 py-2 text-right font-medium text-slate-400">Z-Score</th>
+                            <th className="px-3 py-2 text-center font-medium text-slate-400">Durum</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-700/50">
+                          {Object.entries(sensorStats).map(([sensor, stats]) => {
+                            const absZScore = Math.abs(stats.z_score);
+                            const status = absZScore > config.z_score_threshold ? 'critical' : absZScore > config.z_score_threshold * 0.7 ? 'warning' : 'normal';
+                            return (
+                              <tr key={sensor} className="hover:bg-slate-700/30">
+                                <td className="px-3 py-2 text-slate-200 font-medium">{sensor}</td>
+                                <td className="px-3 py-2 text-right font-mono text-slate-200">
+                                  {stats.current.toFixed(2)}
+                                  {stats.unit && <span className="ml-1 text-slate-500 text-xs">{stats.unit}</span>}
+                                </td>
+                                <td className={`px-3 py-2 text-right font-mono font-bold ${
+                                  status === 'critical' ? 'text-red-400' : status === 'warning' ? 'text-amber-400' : 'text-emerald-400'
+                                }`}>
+                                  {stats.z_score.toFixed(3)}
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                  <Badge className={`text-[10px] ${
+                                    status === 'critical' ? 'bg-red-500/20 text-red-300 border-red-500/30' :
+                                    status === 'warning' ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' :
+                                    'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                                  }`}>
+                                    {status === 'critical' ? 'KRİTİK' : status === 'warning' ? 'DİKKAT' : 'NORMAL'}
+                                  </Badge>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Z-Score Bar Chart Comparison */}
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardHeader>
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <BarChart3 className="h-5 w-5 text-blue-400" />
+                    Sensör Z-Score Karşılaştırması
+                  </CardTitle>
+                  <CardDescription className="text-slate-400">
+                    Tüm sensörlerin Z-Score değerlerinin görsel karşılaştırması
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {Object.keys(sensorStats).length === 0 ? (
+                    <div className="py-8 text-center">
+                      <BarChart3 className="mx-auto h-10 w-10 text-slate-600" />
+                      <p className="mt-2 text-slate-500">Veri bekleniyor...</p>
+                    </div>
+                  ) : (
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={Object.entries(sensorStats).map(([sensor, stats]) => ({
+                            sensor: sensor.length > 10 ? sensor.substring(0, 10) + '...' : sensor,
+                            z_score: stats.z_score,
+                            absZScore: Math.abs(stats.z_score),
+                            fill: Math.abs(stats.z_score) > config.z_score_threshold ? '#ef4444' : 
+                                  Math.abs(stats.z_score) > config.z_score_threshold * 0.7 ? '#f59e0b' : '#22c55e'
+                          }))}
+                          layout="vertical"
+                          margin={{ top: 5, right: 30, left: 80, bottom: 5 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                          <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                          <YAxis type="category" dataKey="sensor" tick={{ fill: '#94a3b8', fontSize: 10 }} width={75} />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
+                            formatter={(value: number) => [value.toFixed(3), 'Z-Score']}
+                          />
+                          <ReferenceLine x={config.z_score_threshold} stroke="#ef4444" strokeDasharray="5 5" label={{ value: 'Eşik', fill: '#ef4444', fontSize: 10 }} />
+                          <ReferenceLine x={-config.z_score_threshold} stroke="#ef4444" strokeDasharray="5 5" />
+                          <Bar dataKey="z_score" radius={[0, 4, 4, 0]}>
+                            {Object.entries(sensorStats).map(([sensor, stats], index) => (
+                              <Cell 
+                                key={`cell-${index}`} 
+                                fill={Math.abs(stats.z_score) > config.z_score_threshold ? '#ef4444' : 
+                                      Math.abs(stats.z_score) > config.z_score_threshold * 0.7 ? '#f59e0b' : '#22c55e'}
+                              />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Additional Analysis Charts */}
+            <div className="grid gap-6 lg:grid-cols-3">
+              {/* Sensor Statistics Cards */}
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardHeader>
+                  <CardTitle className="text-white flex items-center gap-2 text-base">
+                    <Target className="h-4 w-4 text-blue-400" />
+                    Sensör İstatistikleri
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {selectedSensor && sensorStats[selectedSensor] ? (
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center p-2 rounded bg-slate-700/30">
+                        <span className="text-slate-400 text-sm">Minimum</span>
+                        <span className="text-white font-mono font-bold">
+                          {(sensorStats[selectedSensor].min ?? 0).toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center p-2 rounded bg-slate-700/30">
+                        <span className="text-slate-400 text-sm">Maksimum</span>
+                        <span className="text-white font-mono font-bold">
+                          {(sensorStats[selectedSensor].max ?? 0).toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center p-2 rounded bg-slate-700/30">
+                        <span className="text-slate-400 text-sm">Ortalama</span>
+                        <span className="text-white font-mono font-bold">
+                          {sensorStats[selectedSensor].count > 0 
+                            ? ((sensorStats[selectedSensor].sum ?? 0) / sensorStats[selectedSensor].count).toFixed(2)
+                            : '0.00'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center p-2 rounded bg-slate-700/30">
+                        <span className="text-slate-400 text-sm">Toplam Okuma</span>
+                        <span className="text-white font-mono font-bold">
+                          {sensorStats[selectedSensor].count}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center p-2 rounded bg-red-500/10">
+                        <span className="text-red-400 text-sm">Anomali Sayısı</span>
+                        <span className="text-red-400 font-mono font-bold">
+                          {sensorStats[selectedSensor].anomaly_count ?? 0}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center p-2 rounded bg-amber-500/10">
+                        <span className="text-amber-400 text-sm">Anomali Oranı</span>
+                        <span className="text-amber-400 font-mono font-bold">
+                          %{sensorStats[selectedSensor].count > 0 
+                            ? (((sensorStats[selectedSensor].anomaly_count ?? 0) / sensorStats[selectedSensor].count) * 100).toFixed(1)
+                            : '0.0'}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="py-8 text-center text-slate-500">Sensör seçilmedi</p>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Z-Score Distribution Histogram */}
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardHeader>
+                  <CardTitle className="text-white flex items-center gap-2 text-base">
+                    <TrendingDown className="h-4 w-4 text-blue-400" />
+                    Z-Score Dağılımı
+                  </CardTitle>
+                  <CardDescription className="text-slate-400 text-xs">
+                    Son verilerin Z-Score aralıklarına göre dağılımı
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {allDataLogs.length === 0 ? (
+                    <div className="py-8 text-center">
+                      <TrendingDown className="mx-auto h-10 w-10 text-slate-600" />
+                      <p className="mt-2 text-slate-500">Veri bekleniyor...</p>
+                    </div>
+                  ) : (
+                    <div className="h-48">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={(() => {
+                            const ranges = [
+                              { range: '0-1', min: 0, max: 1, count: 0, color: '#22c55e' },
+                              { range: '1-2', min: 1, max: 2, count: 0, color: '#84cc16' },
+                              { range: '2-3', min: 2, max: 3, count: 0, color: '#f59e0b' },
+                              { range: '3-4', min: 3, max: 4, count: 0, color: '#f97316' },
+                              { range: '4+', min: 4, max: Infinity, count: 0, color: '#ef4444' },
+                            ];
+                            allDataLogs.slice(0, 100).forEach(log => {
+                              const absZ = Math.abs(log.z_score);
+                              const range = ranges.find(r => absZ >= r.min && absZ < r.max);
+                              if (range) range.count++;
+                            });
+                            return ranges;
+                          })()}
+                          margin={{ top: 10, right: 10, left: 10, bottom: 20 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                          <XAxis dataKey="range" tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                          <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
+                            formatter={(value: number) => [value, 'Adet']}
+                          />
+                          <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                            {[0, 1, 2, 3, 4].map((index) => (
+                              <Cell key={`cell-${index}`} fill={['#22c55e', '#84cc16', '#f59e0b', '#f97316', '#ef4444'][index]} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Value vs Z-Score Scatter Plot */}
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardHeader>
+                  <CardTitle className="text-white flex items-center gap-2 text-base">
+                    <Activity className="h-4 w-4 text-blue-400" />
+                    Değer - Z-Score İlişkisi
+                  </CardTitle>
+                  <CardDescription className="text-slate-400 text-xs">
+                    {selectedSensor ? `${selectedSensor} sensörü için` : 'Sensör seçin'}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {!selectedSensor || !sensorHistory[selectedSensor]?.length ? (
+                    <div className="py-8 text-center">
+                      <Activity className="mx-auto h-10 w-10 text-slate-600" />
+                      <p className="mt-2 text-slate-500">Sensör seçilmedi</p>
+                    </div>
+                  ) : (
+                    <div className="h-48">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ScatterChart margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                          <XAxis 
+                            type="number" 
+                            dataKey="value" 
+                            name="Değer" 
+                            tick={{ fill: '#94a3b8', fontSize: 10 }}
+                            label={{ value: 'Değer', position: 'bottom', fill: '#94a3b8', fontSize: 10 }}
+                          />
+                          <YAxis 
+                            type="number" 
+                            dataKey="z" 
+                            name="Z-Score" 
+                            tick={{ fill: '#94a3b8', fontSize: 10 }}
+                            label={{ value: 'Z-Score', angle: -90, position: 'left', fill: '#94a3b8', fontSize: 10 }}
+                          />
+                          <ZAxis type="number" range={[30, 100]} />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
+                            formatter={(value: number, name: string) => [value.toFixed(3), name]}
+                          />
+                          <ReferenceLine y={config.z_score_threshold} stroke="#ef4444" strokeDasharray="5 5" />
+                          <ReferenceLine y={-config.z_score_threshold} stroke="#ef4444" strokeDasharray="5 5" />
+                          <Scatter
+                            name={selectedSensor}
+                            data={allDataLogs
+                              .filter(log => log.sensor_type === selectedSensor)
+                              .slice(0, 50)
+                              .map(log => ({
+                                value: log.current_value,
+                                z: log.z_score,
+                                isAnomaly: log.is_anomaly
+                              }))}
+                            fill="#3b82f6"
+                          >
+                            {allDataLogs
+                              .filter(log => log.sensor_type === selectedSensor)
+                              .slice(0, 50)
+                              .map((log, index) => (
+                                <Cell key={`cell-${index}`} fill={log.is_anomaly ? '#ef4444' : '#3b82f6'} />
+                              ))}
+                          </Scatter>
+                        </ScatterChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </div>
           </div>
         )}
