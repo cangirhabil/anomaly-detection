@@ -11,7 +11,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
   Area, ComposedChart, Pie, PieChart, Cell, BarChart, Bar, ReferenceLine, ScatterChart, Scatter, ZAxis
 } from 'recharts';
-import { Activity, AlertTriangle, Settings, RefreshCw, Database, Gauge, PieChart as PieIcon, Wifi, WifiOff, TrendingUp, Clock, Zap, BarChart3, Table2, TrendingDown, Target } from 'lucide-react';
+import { Activity, AlertTriangle, Settings, RefreshCw, Database, Gauge, PieChart as PieIcon, Wifi, WifiOff, TrendingUp, Clock, Zap, BarChart3, Table2, TrendingDown, Target, Mail, Send, FileText, Bot, Plus, Trash2, CheckCircle, XCircle } from 'lucide-react';
 
 interface ReadingData {
   is_anomaly: boolean;
@@ -97,6 +97,62 @@ interface Config {
   alert_message: string;
 }
 
+interface EmailRecipient {
+  email: string;
+  name: string;
+  notify_on_critical: boolean;
+  notify_on_high: boolean;
+  notify_on_medium: boolean;
+  notify_on_low: boolean;
+}
+
+interface EmailConfig {
+  host: string;
+  port: number;
+  username: string;
+  sender_email: string;
+  sender_name: string;
+  use_tls: boolean;
+  use_ssl: boolean;
+  configured: boolean;
+}
+
+interface LLMStatus {
+  available: boolean;
+  model: string;
+  provider: string;
+}
+
+interface AutoReportConfig {
+  enabled: boolean;
+  min_anomalies_for_report: number;
+  anomaly_window_minutes: number;
+  instant_report_on_critical: boolean;
+  cooldown_minutes: number;
+  critical_cooldown_minutes: number;
+  multi_sensor_threshold: number;
+}
+
+interface AutoReportStats {
+  total_anomalies_processed: number;
+  reports_sent: number;
+  reports_skipped_cooldown: number;
+  last_report_sent: string | null;
+  buffer_size: number;
+  config: AutoReportConfig;
+}
+
+interface AnomalyReport {
+  report_id: string;
+  generated_at: string;
+  total_anomalies: number;
+  risk_level: string;
+  summary: string;
+  llm_analysis: string;
+  affected_sensors: string[];
+  recommended_actions: string[];
+}
+
 export default function Dashboard() {
   const [isConnected, setIsConnected] = useState(false);
   const [lastAnomaly, setLastAnomaly] = useState<ReadingData | null>(null);
@@ -107,7 +163,7 @@ export default function Dashboard() {
   const [selectedSensor, setSelectedSensor] = useState<string | null>(null);
   const [anomalyHistory, setAnomalyHistory] = useState<AnomalyLog[]>([]);
   const [allDataLogs, setAllDataLogs] = useState<DataLog[]>([]);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'anomaly-logs' | 'data-logs' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'anomaly-logs' | 'data-logs' | 'reports' | 'settings'>('dashboard');
   const [config, setConfig] = useState<Config>({
     window_size: 100,
     z_score_threshold: 3.0,
@@ -119,16 +175,55 @@ export default function Dashboard() {
   const [configError, setConfigError] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Report & Email States
+  const [emailRecipients, setEmailRecipients] = useState<EmailRecipient[]>([]);
+  const [emailConfig, setEmailConfig] = useState<EmailConfig | null>(null);
+  const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(null);
+  const [currentReport, setCurrentReport] = useState<AnomalyReport | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [emailSending, setEmailSending] = useState(false);
+  const [newRecipientEmail, setNewRecipientEmail] = useState('');
+  const [testEmailAddress, setTestEmailAddress] = useState('');
+  const [reportMessage, setReportMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
+  
+  // Settings States
+  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [smtpSettings, setSmtpSettings] = useState({
+    host: 'smtp.zoho.com',
+    port: 587,
+    username: '',
+    password: '',
+    sender_name: 'Anomali Tespit Sistemi',
+    use_tls: true
+  });
+  const [autoReportConfig, setAutoReportConfig] = useState<AutoReportConfig>({
+    enabled: true,
+    min_anomalies_for_report: 3,
+    anomaly_window_minutes: 5,
+    instant_report_on_critical: true,
+    cooldown_minutes: 15,
+    critical_cooldown_minutes: 5,
+    multi_sensor_threshold: 2
+  });
+  const [autoReportStats, setAutoReportStats] = useState<AutoReportStats | null>(null);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
 
   useEffect(() => {
     connectWebSocket();
     fetchAnomalyHistory();
     fetchAllDataLogs();
     fetchConfig();
+    fetchEmailConfig();
+    fetchLLMStatus();
+    fetchEmailRecipients();
+    fetchAutoReportStatus();
     
     const interval = setInterval(() => {
       fetchAnomalyHistory();
       fetchAllDataLogs();
+      fetchAutoReportStatus();
     }, 10000);
     
     return () => {
@@ -294,6 +389,294 @@ export default function Dashboard() {
     }
   };
 
+  const fetchEmailConfig = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/email/config');
+      if (response.ok) {
+        const data = await response.json();
+        setEmailConfig(data.config);
+      }
+    } catch (error) {
+      console.error('E-posta konfigürasyonu getirme hatası:', error);
+    }
+  };
+
+  const fetchLLMStatus = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/llm/status');
+      if (response.ok) {
+        const data = await response.json();
+        setLlmStatus(data);
+      }
+    } catch (error) {
+      console.error('LLM durumu getirme hatası:', error);
+    }
+  };
+
+  const fetchAutoReportStatus = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/auto-report/status');
+      if (response.ok) {
+        const data = await response.json();
+        setAutoReportStats(data);
+        if (data.config) {
+          setAutoReportConfig(data.config);
+        }
+      }
+    } catch (error) {
+      console.error('Otomatik rapor durumu getirme hatası:', error);
+    }
+  };
+
+  const fetchEmailRecipients = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/email/recipients');
+      if (response.ok) {
+        const data = await response.json();
+        setEmailRecipients(data.recipients);
+      }
+    } catch (error) {
+      console.error('E-posta alıcıları getirme hatası:', error);
+    }
+  };
+
+  const generateReport = async () => {
+    setReportLoading(true);
+    setReportMessage(null);
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/report/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit: 50, include_llm_analysis: true }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.report) {
+          setCurrentReport(data.report);
+          setReportMessage({ type: 'success', text: 'Rapor başarıyla oluşturuldu!' });
+        } else {
+          setReportMessage({ type: 'error', text: data.message || 'Rapor oluşturulamadı' });
+        }
+      }
+    } catch (error) {
+      console.error('Rapor oluşturma hatası:', error);
+      setReportMessage({ type: 'error', text: 'Rapor oluşturma hatası' });
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  const sendReportEmail = async () => {
+    setEmailSending(true);
+    setReportMessage(null);
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/report/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit: 50 }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setReportMessage({ type: 'success', text: `Rapor ${data.recipients?.length || 0} alıcıya gönderildi!` });
+        } else {
+          setReportMessage({ type: 'error', text: data.message || 'E-posta gönderilemedi' });
+        }
+      }
+    } catch (error) {
+      console.error('E-posta gönderme hatası:', error);
+      setReportMessage({ type: 'error', text: 'E-posta gönderme hatası' });
+    } finally {
+      setEmailSending(false);
+    }
+  };
+
+  const sendTestEmail = async () => {
+    if (!testEmailAddress) return;
+    setEmailSending(true);
+    try {
+      const response = await fetch(`http://localhost:8000/api/v1/email/test?recipient=${encodeURIComponent(testEmailAddress)}`, {
+        method: 'POST',
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setReportMessage({ type: 'success', text: 'Test e-postası gönderildi!' });
+        } else {
+          setReportMessage({ type: 'error', text: data.message || 'Test e-postası gönderilemedi' });
+        }
+      }
+    } catch (error) {
+      console.error('Test e-posta hatası:', error);
+      setReportMessage({ type: 'error', text: 'Test e-posta hatası' });
+    } finally {
+      setEmailSending(false);
+    }
+  };
+
+  const addEmailRecipient = async () => {
+    if (!newRecipientEmail) return;
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/email/recipients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: newRecipientEmail,
+          name: '',
+          notify_on_critical: true,
+          notify_on_high: true,
+          notify_on_medium: false,
+          notify_on_low: false,
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setEmailRecipients(data.recipients);
+        setNewRecipientEmail('');
+      }
+    } catch (error) {
+      console.error('Alıcı ekleme hatası:', error);
+    }
+  };
+
+  const removeEmailRecipient = async (email: string) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/v1/email/recipients/${encodeURIComponent(email)}`, {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setEmailRecipients(data.recipients);
+      }
+    } catch (error) {
+      console.error('Alıcı kaldırma hatası:', error);
+    }
+  };
+
+  const saveGeminiConfig = async () => {
+    if (!geminiApiKey) {
+      setSettingsMessage({ type: 'error', text: 'API anahtarı gerekli' });
+      return;
+    }
+    setSettingsSaving(true);
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/llm/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_key: geminiApiKey,
+          model_name: 'gemini-2.5-flash-preview-05-20'
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.available) {
+          setSettingsMessage({ type: 'success', text: 'Gemini API yapılandırıldı!' });
+          fetchLLMStatus();
+        } else {
+          setSettingsMessage({ type: 'error', text: 'API anahtarı geçersiz' });
+        }
+      }
+    } catch (error) {
+      console.error('Gemini config hatası:', error);
+      setSettingsMessage({ type: 'error', text: 'Bağlantı hatası' });
+    } finally {
+      setSettingsSaving(false);
+      setTimeout(() => setSettingsMessage(null), 3000);
+    }
+  };
+
+  const saveSmtpConfig = async () => {
+    if (!smtpSettings.username || !smtpSettings.password) {
+      setSettingsMessage({ type: 'error', text: 'E-posta ve şifre gerekli' });
+      return;
+    }
+    setSettingsSaving(true);
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/email/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          host: smtpSettings.host,
+          port: smtpSettings.port,
+          username: smtpSettings.username,
+          password: smtpSettings.password,
+          sender_email: smtpSettings.username,
+          sender_name: smtpSettings.sender_name,
+          use_tls: smtpSettings.use_tls,
+          use_ssl: false
+        }),
+      });
+      if (response.ok) {
+        setSettingsMessage({ type: 'success', text: 'SMTP ayarları kaydedildi!' });
+        fetchEmailConfig();
+      }
+    } catch (error) {
+      console.error('SMTP config hatası:', error);
+      setSettingsMessage({ type: 'error', text: 'Bağlantı hatası' });
+    } finally {
+      setSettingsSaving(false);
+      setTimeout(() => setSettingsMessage(null), 3000);
+    }
+  };
+
+  const saveAutoReportConfig = async () => {
+    setSettingsSaving(true);
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/auto-report/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(autoReportConfig),
+      });
+      if (response.ok) {
+        setSettingsMessage({ type: 'success', text: 'Otomatik raporlama ayarları kaydedildi!' });
+        fetchAutoReportStatus();
+      }
+    } catch (error) {
+      console.error('Auto report config hatası:', error);
+      setSettingsMessage({ type: 'error', text: 'Bağlantı hatası' });
+    } finally {
+      setSettingsSaving(false);
+      setTimeout(() => setSettingsMessage(null), 3000);
+    }
+  };
+
+  const toggleAutoReport = async () => {
+    try {
+      const newState = !autoReportConfig.enabled;
+      const response = await fetch(`http://localhost:8000/api/v1/auto-report/toggle?enabled=${newState}`, {
+        method: 'POST',
+      });
+      if (response.ok) {
+        setAutoReportConfig(prev => ({ ...prev, enabled: newState }));
+        setSettingsMessage({ type: 'success', text: `Otomatik raporlama ${newState ? 'aktif' : 'devre dışı'}` });
+        setTimeout(() => setSettingsMessage(null), 3000);
+      }
+    } catch (error) {
+      console.error('Toggle hatası:', error);
+    }
+  };
+
+  const getRiskLevelColor = (level: string) => {
+    switch (level?.toUpperCase()) {
+      case 'CRITICAL': return 'bg-red-500 text-white';
+      case 'HIGH': return 'bg-orange-500 text-white';
+      case 'MEDIUM': return 'bg-yellow-500 text-black';
+      case 'LOW': return 'bg-green-500 text-white';
+      default: return 'bg-slate-500 text-white';
+    }
+  };
+
+  const getRiskLevelLabel = (level: string) => {
+    switch (level?.toUpperCase()) {
+      case 'CRITICAL': return 'KRİTİK';
+      case 'HIGH': return 'YÜKSEK';
+      case 'MEDIUM': return 'ORTA';
+      case 'LOW': return 'DÜŞÜK';
+      default: return level;
+    }
+  };
+
   const updateConfig = async () => {
     try {
       setConfigError(false);
@@ -400,6 +783,7 @@ export default function Dashboard() {
             { id: 'dashboard', label: 'Dashboard', icon: Activity },
             { id: 'anomaly-logs', label: `Anomaliler (${anomalyHistory.length})`, icon: AlertTriangle },
             { id: 'data-logs', label: `Tüm Veriler (${allDataLogs.length})`, icon: Database },
+            { id: 'reports', label: 'Raporlar & E-posta', icon: FileText },
             { id: 'settings', label: 'Ayarlar', icon: Settings },
           ].map((tab) => (
             <Button
@@ -1156,16 +1540,498 @@ export default function Dashboard() {
         )}
 
         {/* Settings Tab */}
+        {activeTab === 'reports' && (
+          <div className="space-y-6">
+            {/* Status Cards */}
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-medium text-slate-400">LLM Durumu</p>
+                      <p className={`mt-1 text-lg font-bold ${llmStatus?.available ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {llmStatus?.available ? 'Aktif' : 'Pasif'}
+                      </p>
+                      <p className="text-xs text-slate-500">{llmStatus?.model || 'Yapılandırılmamış'}</p>
+                    </div>
+                    <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${llmStatus?.available ? 'bg-emerald-500/10' : 'bg-red-500/10'}`}>
+                      <Bot className={`h-5 w-5 ${llmStatus?.available ? 'text-emerald-400' : 'text-red-400'}`} />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-medium text-slate-400">E-posta Durumu</p>
+                      <p className={`mt-1 text-lg font-bold ${emailConfig?.configured ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {emailConfig?.configured ? 'Yapılandırıldı' : 'Yapılandırılmadı'}
+                      </p>
+                      <p className="text-xs text-slate-500">{emailConfig?.host || 'SMTP ayarlanmamış'}</p>
+                    </div>
+                    <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${emailConfig?.configured ? 'bg-emerald-500/10' : 'bg-red-500/10'}`}>
+                      <Mail className={`h-5 w-5 ${emailConfig?.configured ? 'text-emerald-400' : 'text-red-400'}`} />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-medium text-slate-400">Kayıtlı Alıcılar</p>
+                      <p className="mt-1 text-lg font-bold text-blue-400">{emailRecipients.length}</p>
+                      <p className="text-xs text-slate-500">E-posta adresi</p>
+                    </div>
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">
+                      <Send className="h-5 w-5 text-blue-400" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Message Alert */}
+            {reportMessage && (
+              <Alert className={reportMessage.type === 'success' ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-red-500/30 bg-red-500/10'}>
+                {reportMessage.type === 'success' ? <CheckCircle className="h-4 w-4 text-emerald-400" /> : <XCircle className="h-4 w-4 text-red-400" />}
+                <AlertTitle className={reportMessage.type === 'success' ? 'text-emerald-400' : 'text-red-400'}>
+                  {reportMessage.type === 'success' ? 'Başarılı' : 'Hata'}
+                </AlertTitle>
+                <AlertDescription className={reportMessage.type === 'success' ? 'text-emerald-300' : 'text-red-300'}>
+                  {reportMessage.text}
+                </AlertDescription>
+              </Alert>
+            )}
+
+            <div className="grid gap-6 lg:grid-cols-2">
+              {/* Report Generation */}
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardHeader>
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <FileText className="h-5 w-5 text-blue-400" />
+                    Anomali Raporu Oluştur
+                  </CardTitle>
+                  <CardDescription className="text-slate-400">
+                    Tespit edilen anomalileri AI ile analiz ederek detaylı rapor oluşturun
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex gap-2">
+                    <Button 
+                      onClick={generateReport} 
+                      disabled={reportLoading}
+                      className="flex-1 bg-blue-600 hover:bg-blue-700"
+                    >
+                      {reportLoading ? (
+                        <>
+                          <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                          Rapor Oluşturuluyor...
+                        </>
+                      ) : (
+                        <>
+                          <FileText className="mr-2 h-4 w-4" />
+                          Rapor Oluştur
+                        </>
+                      )}
+                    </Button>
+                    <Button 
+                      onClick={sendReportEmail} 
+                      disabled={emailSending || !emailConfig?.configured || emailRecipients.length === 0}
+                      variant="outline"
+                      className="border-slate-600 hover:bg-slate-700"
+                    >
+                      {emailSending ? (
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Send className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+
+                  {/* Current Report Preview */}
+                  {currentReport && (
+                    <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-slate-300">Rapor ID: {currentReport.report_id}</span>
+                        <Badge className={getRiskLevelColor(currentReport.risk_level)}>
+                          {getRiskLevelLabel(currentReport.risk_level)} RİSK
+                        </Badge>
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        Oluşturulma: {new Date(currentReport.generated_at).toLocaleString('tr-TR')}
+                      </div>
+                      <div className="text-sm text-slate-300">
+                        <strong>Özet:</strong> {currentReport.summary}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        Toplam Anomali: {currentReport.total_anomalies} | 
+                        Etkilenen Sensörler: {currentReport.affected_sensors?.join(', ')}
+                      </div>
+                      {currentReport.llm_analysis && (
+                        <div className="max-h-48 overflow-y-auto rounded bg-slate-800 p-3 text-xs text-slate-300 whitespace-pre-wrap">
+                          {currentReport.llm_analysis.substring(0, 1000)}
+                          {currentReport.llm_analysis.length > 1000 && '...'}
+                        </div>
+                      )}
+                      {currentReport.recommended_actions && currentReport.recommended_actions.length > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium text-slate-400">Önerilen Aksiyonlar:</p>
+                          <ul className="list-disc list-inside text-xs text-slate-300 space-y-0.5">
+                            {currentReport.recommended_actions.slice(0, 5).map((action, i) => (
+                              <li key={i}>{action}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Email Recipients */}
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardHeader>
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <Mail className="h-5 w-5 text-blue-400" />
+                    E-posta Alıcıları
+                  </CardTitle>
+                  <CardDescription className="text-slate-400">
+                    Raporların gönderileceği e-posta adreslerini yönetin
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Add Recipient */}
+                  <div className="flex gap-2">
+                    <Input 
+                      type="email"
+                      placeholder="ornek@email.com"
+                      value={newRecipientEmail}
+                      onChange={(e) => setNewRecipientEmail(e.target.value)}
+                      className="bg-slate-700 border-slate-600 text-white"
+                    />
+                    <Button onClick={addEmailRecipient} className="bg-emerald-600 hover:bg-emerald-700">
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+
+                  {/* Recipients List */}
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {emailRecipients.length === 0 ? (
+                      <div className="text-center py-4 text-slate-500 text-sm">
+                        Henüz alıcı eklenmemiş
+                      </div>
+                    ) : (
+                      emailRecipients.map((recipient) => (
+                        <div key={recipient.email} className="flex items-center justify-between rounded-lg bg-slate-700/50 px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <Mail className="h-4 w-4 text-slate-400" />
+                            <span className="text-sm text-slate-300">{recipient.email}</span>
+                          </div>
+                          <Button 
+                            variant="ghost" 
+                            size="sm"
+                            onClick={() => removeEmailRecipient(recipient.email)}
+                            className="h-8 w-8 p-0 text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Test Email */}
+                  <div className="border-t border-slate-700 pt-4 space-y-2">
+                    <Label className="text-slate-300 text-sm">Test E-postası Gönder</Label>
+                    <div className="flex gap-2">
+                      <Input 
+                        type="email"
+                        placeholder="test@email.com"
+                        value={testEmailAddress}
+                        onChange={(e) => setTestEmailAddress(e.target.value)}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                      <Button 
+                        onClick={sendTestEmail} 
+                        disabled={emailSending || !emailConfig?.configured}
+                        variant="outline"
+                        className="border-slate-600 hover:bg-slate-700"
+                      >
+                        {emailSending ? <RefreshCw className="h-4 w-4 animate-spin" /> : 'Test'}
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* API & SMTP Configuration */}
+            <div className="grid gap-6 lg:grid-cols-2">
+              {/* Gemini API Settings */}
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-white flex items-center gap-2">
+                      <Bot className="h-5 w-5 text-purple-400" />
+                      Gemini API Ayarları
+                    </CardTitle>
+                    <Badge className={llmStatus?.available ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'}>
+                      {llmStatus?.available ? 'Aktif' : 'Pasif'}
+                    </Badge>
+                  </div>
+                  <CardDescription className="text-slate-400">
+                    AI destekli anomali analizi için Gemini API yapılandırması
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">Gemini API Key</Label>
+                    <Input 
+                      type="password"
+                      placeholder="AIza..."
+                      value={geminiApiKey}
+                      onChange={(e) => setGeminiApiKey(e.target.value)}
+                      className="bg-slate-700 border-slate-600 text-white"
+                    />
+                    <p className="text-xs text-slate-500">
+                      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
+                        Google AI Studio
+                      </a> üzerinden ücretsiz API key alabilirsiniz
+                    </p>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">Model</Label>
+                    <Input 
+                      value="gemini-2.5-flash-preview-05-20"
+                      disabled
+                      className="bg-slate-700/50 border-slate-600 text-slate-400"
+                    />
+                  </div>
+
+                  <Button 
+                    onClick={saveGeminiConfig} 
+                    disabled={settingsSaving || !geminiApiKey}
+                    className="w-full bg-purple-600 hover:bg-purple-700"
+                  >
+                    {settingsSaving ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Bot className="mr-2 h-4 w-4" />}
+                    API Anahtarını Kaydet
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {/* SMTP Email Settings */}
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-white flex items-center gap-2">
+                      <Mail className="h-5 w-5 text-blue-400" />
+                      E-posta (SMTP) Ayarları
+                    </CardTitle>
+                    <Badge className={emailConfig?.configured ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'}>
+                      {emailConfig?.configured ? 'Yapılandırıldı' : 'Bekliyor'}
+                    </Badge>
+                  </div>
+                  <CardDescription className="text-slate-400">
+                    Zoho Mail veya diğer SMTP sağlayıcıları için ayarlar
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label className="text-slate-300">SMTP Sunucu</Label>
+                      <Input 
+                        value={smtpSettings.host}
+                        onChange={(e) => setSmtpSettings({...smtpSettings, host: e.target.value})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-slate-300">Port</Label>
+                      <Input 
+                        type="number"
+                        value={smtpSettings.port}
+                        onChange={(e) => setSmtpSettings({...smtpSettings, port: parseInt(e.target.value) || 587})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">E-posta Adresi (Gönderici)</Label>
+                    <Input 
+                      type="email"
+                      placeholder="ornek@zohomail.com"
+                      value={smtpSettings.username}
+                      onChange={(e) => setSmtpSettings({...smtpSettings, username: e.target.value})}
+                      className="bg-slate-700 border-slate-600 text-white"
+                    />
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">Şifre / Uygulama Şifresi</Label>
+                    <Input 
+                      type="password"
+                      placeholder="••••••••"
+                      value={smtpSettings.password}
+                      onChange={(e) => setSmtpSettings({...smtpSettings, password: e.target.value})}
+                      className="bg-slate-700 border-slate-600 text-white"
+                    />
+                    <p className="text-xs text-slate-500">
+                      Zoho Mail için hesap şifrenizi kullanın
+                    </p>
+                  </div>
+
+                  <Button 
+                    onClick={saveSmtpConfig} 
+                    disabled={settingsSaving || !smtpSettings.username || !smtpSettings.password}
+                    className="w-full bg-blue-600 hover:bg-blue-700"
+                  >
+                    {settingsSaving ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}
+                    SMTP Ayarlarını Kaydet
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Auto Report Settings */}
+            <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-white flex items-center gap-2">
+                      <Zap className="h-5 w-5 text-amber-400" />
+                      Otomatik Raporlama Ayarları
+                    </CardTitle>
+                    <CardDescription className="text-slate-400">
+                      Sistem anomali tespit ettiğinde otomatik rapor oluşturma ve e-posta gönderme
+                    </CardDescription>
+                  </div>
+                  <Button
+                    onClick={toggleAutoReport}
+                    className={autoReportConfig.enabled ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-600 hover:bg-slate-700'}
+                  >
+                    {autoReportConfig.enabled ? 'Aktif' : 'Devre Dışı'}
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {/* Stats Row */}
+                {autoReportStats && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-slate-700/50 rounded-lg p-3 text-center">
+                      <p className="text-xs text-slate-400">İşlenen Anomali</p>
+                      <p className="text-xl font-bold text-white">{autoReportStats.total_anomalies_processed}</p>
+                    </div>
+                    <div className="bg-slate-700/50 rounded-lg p-3 text-center">
+                      <p className="text-xs text-slate-400">Gönderilen Rapor</p>
+                      <p className="text-xl font-bold text-emerald-400">{autoReportStats.reports_sent}</p>
+                    </div>
+                    <div className="bg-slate-700/50 rounded-lg p-3 text-center">
+                      <p className="text-xs text-slate-400">Cooldown Atlanan</p>
+                      <p className="text-xl font-bold text-amber-400">{autoReportStats.reports_skipped_cooldown}</p>
+                    </div>
+                    <div className="bg-slate-700/50 rounded-lg p-3 text-center">
+                      <p className="text-xs text-slate-400">Tampon Boyutu</p>
+                      <p className="text-xl font-bold text-blue-400">{autoReportStats.buffer_size}</p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">Min. Anomali Sayısı</Label>
+                    <Input 
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={autoReportConfig.min_anomalies_for_report}
+                      onChange={(e) => setAutoReportConfig({...autoReportConfig, min_anomalies_for_report: parseInt(e.target.value) || 3})}
+                      className="bg-slate-700 border-slate-600 text-white"
+                    />
+                    <p className="text-xs text-slate-500">Rapor için gerekli minimum anomali</p>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">Değerlendirme Penceresi (dk)</Label>
+                    <Input 
+                      type="number"
+                      min={1}
+                      max={60}
+                      value={autoReportConfig.anomaly_window_minutes}
+                      onChange={(e) => setAutoReportConfig({...autoReportConfig, anomaly_window_minutes: parseInt(e.target.value) || 5})}
+                      className="bg-slate-700 border-slate-600 text-white"
+                    />
+                    <p className="text-xs text-slate-500">Bu süredeki anomaliler değerlendirilir</p>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">Normal Cooldown (dk)</Label>
+                    <Input 
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={autoReportConfig.cooldown_minutes}
+                      onChange={(e) => setAutoReportConfig({...autoReportConfig, cooldown_minutes: parseInt(e.target.value) || 15})}
+                      className="bg-slate-700 border-slate-600 text-white"
+                    />
+                    <p className="text-xs text-slate-500">Aynı seviye için bekleme süresi</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 bg-slate-700/50 rounded-lg p-3">
+                  <input
+                    type="checkbox"
+                    checked={autoReportConfig.instant_report_on_critical}
+                    onChange={(e) => setAutoReportConfig({...autoReportConfig, instant_report_on_critical: e.target.checked})}
+                    className="h-4 w-4 rounded border-slate-600"
+                  />
+                  <div>
+                    <Label className="text-slate-300">Kritik Anomalide Anında Rapor</Label>
+                    <p className="text-xs text-slate-500">Z-Score &gt; 4 olunca cooldown beklemeden hemen rapor gönder</p>
+                  </div>
+                </div>
+
+                <Button 
+                  onClick={saveAutoReportConfig} 
+                  disabled={settingsSaving}
+                  className="w-full bg-amber-600 hover:bg-amber-700"
+                >
+                  {settingsSaving ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
+                  Otomatik Raporlama Ayarlarını Kaydet
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Settings Message for Reports Tab */}
+            {settingsMessage && (
+              <Alert className={settingsMessage.type === 'success' ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-red-500/30 bg-red-500/10'}>
+                {settingsMessage.type === 'success' ? <CheckCircle className="h-4 w-4 text-emerald-400" /> : <XCircle className="h-4 w-4 text-red-400" />}
+                <AlertTitle className={settingsMessage.type === 'success' ? 'text-emerald-400' : 'text-red-400'}>
+                  {settingsMessage.type === 'success' ? 'Başarılı' : 'Hata'}
+                </AlertTitle>
+                <AlertDescription className={settingsMessage.type === 'success' ? 'text-emerald-300' : 'text-red-300'}>
+                  {settingsMessage.text}
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
+        )}
+
         {activeTab === 'settings' && (
           <div className="grid gap-6 lg:grid-cols-2">
             <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
               <CardHeader>
                 <CardTitle className="text-white flex items-center gap-2">
                   <Settings className="h-5 w-5 text-blue-400" />
-                  Sistem Ayarları
+                  Anomali Tespit Ayarları
                 </CardTitle>
                 <CardDescription className="text-slate-400">
-                  Anomali tespit parametrelerini buradan ayarlayabilirsiniz
+                  Z-Score ve pencere boyutu parametreleri
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
@@ -1177,7 +2043,7 @@ export default function Dashboard() {
                 )}
 
                 <div className="space-y-2">
-                  <Label htmlFor="z_score" className="text-slate-300 font-medium">Hassasiyet Seviyesi (Z-Score Eşiği)</Label>
+                  <Label htmlFor="z_score" className="text-slate-300 font-medium">Hassasiyet (Z-Score Eşiği)</Label>
                   <div className="flex items-center gap-3">
                     <Input 
                       id="z_score"
@@ -1195,9 +2061,8 @@ export default function Dashboard() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="window" className="text-slate-300 font-medium">Analiz Penceresi</Label>
+                  <Label className="text-slate-300 font-medium">Analiz Penceresi</Label>
                   <Input 
-                    id="window"
                     type="number" 
                     className="bg-slate-700 border-slate-600 text-white"
                     value={config.window_size} 
@@ -1210,9 +2075,8 @@ export default function Dashboard() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="training" className="text-slate-300">Öğrenme Süresi</Label>
+                    <Label className="text-slate-300">Öğrenme Süresi</Label>
                     <Input 
-                      id="training"
                       type="number" 
                       className="bg-slate-700 border-slate-600 text-white"
                       value={config.min_training_size} 
@@ -1220,9 +2084,8 @@ export default function Dashboard() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="mindata" className="text-slate-300">Min. Veri</Label>
+                    <Label className="text-slate-300">Min. Veri</Label>
                     <Input 
-                      id="mindata"
                       type="number" 
                       className="bg-slate-700 border-slate-600 text-white"
                       value={config.min_data_points} 
@@ -1232,40 +2095,21 @@ export default function Dashboard() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="alert" className="text-slate-300 font-medium">Alarm Mesajı</Label>
+                  <Label className="text-slate-300 font-medium">Alarm Mesajı</Label>
                   <Input 
-                    id="alert"
                     type="text" 
                     className="bg-slate-700 border-slate-600 text-white"
                     placeholder="⚠️ ANOMALİ TESPİT EDİLDİ!"
                     value={config.alert_message} 
                     onChange={(e) => setConfig({...config, alert_message: e.target.value})}
                   />
-                  <p className="text-xs text-slate-500">
-                    Anomali tespit edildiğinde gösterilecek uyarı mesajı
-                  </p>
                 </div>
-
-                {configSaved && (
-                  <Alert className="bg-emerald-500/10 border-emerald-500/50">
-                    <AlertTitle className="text-emerald-400 flex items-center gap-2">
-                      ✅ Ayarlar Kaydedildi!
-                    </AlertTitle>
-                    <AlertDescription className="text-emerald-300">
-                      Tüm parametreler başarıyla güncellendi.
-                    </AlertDescription>
-                  </Alert>
-                )}
 
                 {configError && (
                   <Alert className="bg-red-500/10 border-red-500/50">
                     <AlertTriangle className="h-4 w-4 text-red-400" />
-                    <AlertTitle className="text-red-400">
-                      Ayarlar Kaydedilemedi!
-                    </AlertTitle>
-                    <AlertDescription className="text-red-300">
-                      Backend sunucusuna bağlanılamadı. Lütfen sunucunun çalıştığından emin olun.
-                    </AlertDescription>
+                    <AlertTitle className="text-red-400">Hata</AlertTitle>
+                    <AlertDescription className="text-red-300">Ayarlar kaydedilemedi</AlertDescription>
                   </Alert>
                 )}
 

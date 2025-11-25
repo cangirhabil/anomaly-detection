@@ -1,8 +1,8 @@
 # 🏭 Endüstriyel IoT Anomali Tespit Mikroservisi
 
-**Endüstriyel sensör verileri için istatistiksel anomali tespiti**
+**Endüstriyel sensör verileri için istatistiksel anomali tespiti + AI Raporlama**
 
-Z-Score metodolojisi kullanarak titreşim, sıcaklık, ses, motor akımı ve üretim hızı gibi sensör verilerindeki anormallikleri otomatik tespit eden, plug-and-play FastAPI mikroservisi.
+Z-Score metodolojisi kullanarak titreşim, sıcaklık, ses, motor akımı ve üretim hızı gibi sensör verilerindeki anormallikleri otomatik tespit eden, **Gemini AI ile profesyonel raporlar oluşturan** ve **e-posta bildirimleri gönderen** FastAPI mikroservisi.
 
 ---
 
@@ -10,6 +10,8 @@ Z-Score metodolojisi kullanarak titreşim, sıcaklık, ses, motor akımı ve ür
 
 - ✅ **Çoklu Sensör Desteği:** Titreşim (X,Y,Z), Sıcaklık, Ses, Motor Akımı, Üretim Hızı
 - ✅ **İstatistiksel Tespit:** Z-Score algoritması ile bilimsel anomali tespiti
+- ✅ **🤖 AI Raporlama:** Gemini 2.5 Flash ile profesyonel anomali analizi
+- ✅ **📧 E-posta Bildirimleri:** Otomatik rapor gönderimi (SMTP)
 - ✅ **REST API:** Tam özellikli sensör veri analizi API'si
 - ✅ **Plug-and-Play:** Docker ile tek komutla çalışır
 - ✅ **Dil Bağımsız:** Python, JavaScript, Java, C# vb. her dilden kullanılabilir
@@ -214,4 +216,109 @@ client.send_reading(sensor_type="throughput", value=bottles_per_minute)
 # Motor akımını izle
 client.send_reading(sensor_type="motor_current", value=amps)
 # Beklenmedik akım artışlarında (sıkışma vb.) sistemi durdur
+```
+
+---
+
+## 🤖 AI Raporlama (Gemini)
+
+Tespit edilen anomalileri Gemini 2.5 Flash ile analiz ederek profesyonel raporlar oluşturabilirsiniz.
+
+### Kurulum
+
+1. **Google AI Studio'dan API key alın:** https://aistudio.google.com/apikey
+
+2. **Backend `.env` dosyasına ekleyin:**
+```bash
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+3. **Backend'i yeniden başlatın**
+
+### API Kullanımı
+
+```python
+import requests
+
+# Rapor oluştur
+response = requests.post(
+    "http://localhost:8000/api/v1/report/generate",
+    json={"limit": 50, "include_llm_analysis": True}
+)
+report = response.json()
+
+print(f"Risk Seviyesi: {report['report']['risk_level']}")
+print(f"Özet: {report['report']['summary']}")
+print(f"AI Analizi: {report['report']['llm_analysis']}")
+```
+
+### Rapor İçeriği
+
+- **Yönetici Özeti:** Kısa ve öz anomali özeti
+- **Risk Seviyesi:** LOW, MEDIUM, HIGH, CRITICAL
+- **Detaylı Analiz:** Her sensör için ne oldu, neden önemli
+- **Kök Neden Analizi:** Anomalilerin muhtemel sebepleri
+- **Önerilen Aksiyonlar:** Acil ve uzun vadeli aksiyonlar
+
+---
+
+## 📧 E-posta Bildirimleri
+
+Anomali raporlarını otomatik olarak e-posta ile gönderebilirsiniz.
+
+### SMTP Kurulumu (Gmail)
+
+1. **Google Hesabında 2FA aktif edin**
+
+2. **Uygulama Şifresi oluşturun:** https://myaccount.google.com/apppasswords
+
+3. **Backend `.env` dosyasına ekleyin:**
+```bash
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your_email@gmail.com
+SMTP_PASSWORD=your_app_password_here
+SMTP_SENDER_EMAIL=your_email@gmail.com
+SMTP_USE_TLS=true
+```
+
+4. **Varsayılan alıcıları ekleyin (opsiyonel):**
+```bash
+EMAIL_RECIPIENTS=admin@example.com,operator@example.com
+```
+
+### API Kullanımı
+
+```python
+import requests
+
+# Alıcı ekle
+requests.post(
+    "http://localhost:8000/api/v1/email/recipients",
+    json={
+        "email": "muhendis@example.com",
+        "name": "Bakım Mühendisi",
+        "notify_on_critical": True,
+        "notify_on_high": True,
+        "notify_on_medium": False,
+        "notify_on_low": False
+    }
+)
+
+# Rapor oluştur ve gönder
+response = requests.post(
+    "http://localhost:8000/api/v1/report/send",
+    json={"limit": 50}
+)
+
+print(f"Gönderildi: {response.json()['recipients']}")
+```
+
+### Test E-postası
+
+```python
+# E-posta yapılandırmasını test et
+requests.post(
+    "http://localhost:8000/api/v1/email/test?recipient=test@example.com"
+)
 ```

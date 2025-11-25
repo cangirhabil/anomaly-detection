@@ -1,7 +1,7 @@
 anomaly:
   alert_message: "\u26A0\uFE0F ANOMAL\u0130 TESP\u0130T ED\u0130LD\u0130!"
-  min_data_points: 200
-  min_training_size: 500
+  min_data_points: 50
+  min_training_size: 100
   sensors:
     acoustic_noise:
       min_training_size: 200
@@ -18,8 +18,22 @@ anomaly:
     vibration_level:
       min_training_size: 200
       threshold: 2.0
-  window_size: 10000
+  window_size: 500
   z_score_threshold: 2.5
+auto_reporting:
+  anomaly_window_minutes: 5
+  cooldown_minutes: 15
+  critical_cooldown_minutes: 5
+  enabled: true
+  instant_report_on_critical: true
+  instant_report_on_high: false
+  min_anomalies_for_report: 3
+  min_high_anomalies: 3
+  min_medium_anomalies: 5
+  multi_sensor_threshold: 2
+  working_hours_end: 18
+  working_hours_only: false
+  working_hours_start: 8
 cors:
   allow_methods:
   - GET
@@ -30,6 +44,30 @@ cors:
   - http://localhost:3000
   - http://localhost:8080
   enabled: true
+email:
+  enabled: true
+  notifications:
+    daily_report_hour: 8
+    instant_alert_levels:
+    - CRITICAL
+    - HIGH
+    instant_alerts: true
+    periodic_reports: true
+    report_period: daily
+  recipients: []
+  smtp:
+    host: smtp.gmail.com
+    port: 587
+    use_ssl: false
+    use_tls: true
+llm:
+  enabled: true
+  max_tokens: 4096
+  min_anomalies_for_analysis: 1
+  model: gemini-2.5-flash-preview-05-20
+  provider: gemini
+  report_cooldown: 300
+  temperature: 0.7
 logging:
   file: logs/anomaly-detector.log
   format: json
