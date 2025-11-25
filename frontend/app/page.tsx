@@ -9,9 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
-  Area, AreaChart, Bar, BarChart, Cell, ComposedChart, Pie, PieChart, ReferenceLine
+  Area, ComposedChart, Pie, PieChart, Cell
 } from 'recharts';
-import { Activity, AlertTriangle, Settings, RefreshCw, Database, Gauge, PieChart as PieIcon } from 'lucide-react';
+import { Activity, AlertTriangle, Settings, RefreshCw, Database, Gauge, PieChart as PieIcon, Wifi, WifiOff, TrendingUp, Clock, Zap } from 'lucide-react';
 
 interface ReadingData {
   is_anomaly: boolean;
@@ -64,6 +64,7 @@ interface SensorStats {
     z_score: number;
     is_anomaly: boolean;
     count: number;
+    unit?: string;
   };
 }
 
@@ -76,7 +77,6 @@ interface Config {
 }
 
 export default function Dashboard() {
-  const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [lastAnomaly, setLastAnomaly] = useState<ReadingData | null>(null);
   const [totalReadings, setTotalReadings] = useState(0);
@@ -94,8 +94,9 @@ export default function Dashboard() {
     min_training_size: 20,
     alert_message: "⚠️ ANOMALİ TESPİT EDİLDİ!"
   });
+  const [configSaved, setConfigSaved] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     connectWebSocket();
@@ -103,7 +104,6 @@ export default function Dashboard() {
     fetchAllDataLogs();
     fetchConfig();
     
-    // Her 10 saniyede bir logları güncelle
     const interval = setInterval(() => {
       fetchAnomalyHistory();
       fetchAllDataLogs();
@@ -132,15 +132,12 @@ export default function Dashboard() {
       ws.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          console.log('📨 Gelen mesaj:', message);
           
           if (message.type === 'reading' && message.data) {
             const reading: ReadingData = message.data;
             
-            // Toplam okuma sayısını artır
             setTotalReadings(prev => prev + 1);
             
-            // Tüm veri loglarına ekle
             setAllDataLogs(prev => {
               const newLog: DataLog = {
                 timestamp: reading.timestamp,
@@ -152,15 +149,13 @@ export default function Dashboard() {
                 is_anomaly: reading.is_anomaly,
                 unit: reading.unit
               };
-              return [newLog, ...prev].slice(0, 200); // Son 200 veri
+              return [newLog, ...prev].slice(0, 200);
             });
             
-            // Anomali sayacı
             if (reading.is_anomaly) {
               setAnomalyCount(prev => prev + 1);
               setLastAnomaly(reading);
               
-              // Anomali geçmişine ekle
               setAnomalyHistory(prev => {
                 const newHistory = [{
                   timestamp: reading.timestamp,
@@ -172,22 +167,21 @@ export default function Dashboard() {
                   sensor_id: reading.sensor_id,
                   unit: reading.unit
                 }, ...prev];
-                return newHistory.slice(0, 50); // Son 50 anomali
+                return newHistory.slice(0, 50);
               });
             }
             
-            // Sensör istatistiklerini güncelle
             setSensorStats(prev => ({
               ...prev,
               [reading.sensor_type]: {
                 current: reading.current_value,
                 z_score: reading.z_score,
                 is_anomaly: reading.is_anomaly,
-                count: (prev[reading.sensor_type]?.count || 0) + 1
+                count: (prev[reading.sensor_type]?.count || 0) + 1,
+                unit: reading.unit
               }
             }));
 
-            // Grafik verisini güncelle
             const time = new Date(reading.timestamp).toLocaleTimeString('tr-TR');
             const newPoint: ChartDataPoint = {
               time,
@@ -196,13 +190,7 @@ export default function Dashboard() {
               threshold: reading.threshold,
               anomaly: reading.is_anomaly ? reading.current_value : undefined
             };
-            
-            setChartData(prev => {
-              const updated = [...prev, newPoint];
-              return updated.slice(-100); // Son 100 veri
-            });
 
-            // Sensör geçmişini güncelle
             setSensorHistory(prev => {
               const currentHistory = prev[reading.sensor_type] || [];
               const newHistory = [...currentHistory, newPoint].slice(-100);
@@ -212,7 +200,6 @@ export default function Dashboard() {
               };
             });
 
-            // İlk sensörü seç
             setSelectedSensor(prev => prev || reading.sensor_type);
           }
         } catch (error) {
@@ -220,13 +207,12 @@ export default function Dashboard() {
         }
       };
 
-      ws.onerror = (error) => {
-        console.error('❌ WebSocket hatası:', error);
+      ws.onerror = () => {
+        console.error('❌ WebSocket hatası');
       };
 
       ws.onclose = () => {
         setIsConnected(false);
-        console.log('⚠️ WebSocket bağlantısı kapandı, 3 saniye sonra yeniden bağlanılacak...');
         reconnectTimeoutRef.current = setTimeout(connectWebSocket, 3000);
       };
 
@@ -285,7 +271,8 @@ export default function Dashboard() {
         body: JSON.stringify(config),
       });
       if (response.ok) {
-        alert('Konfigürasyon güncellendi!');
+        setConfigSaved(true);
+        setTimeout(() => setConfigSaved(false), 3000);
       }
     } catch (error) {
       console.error('Konfigürasyon güncelleme hatası:', error);
@@ -298,13 +285,14 @@ export default function Dashboard() {
         method: 'POST',
       });
       if (response.ok) {
-        setChartData([]);
         setTotalReadings(0);
         setAnomalyCount(0);
         setSensorStats({});
+        setSensorHistory({});
         setLastAnomaly(null);
         setAnomalyHistory([]);
-        alert('Sistem sıfırlandı!');
+        setAllDataLogs([]);
+        setSelectedSensor(null);
       }
     } catch (error) {
       console.error('Sistem sıfırlama hatası:', error);
@@ -323,232 +311,245 @@ export default function Dashboard() {
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
-      case 'critical': return 'text-red-700 bg-red-100 dark:bg-red-900 dark:text-red-200';
-      case 'warning': return 'text-orange-700 bg-orange-100 dark:bg-orange-900 dark:text-orange-200';
-      default: return 'text-yellow-700 bg-yellow-100 dark:bg-yellow-900 dark:text-yellow-200';
+      case 'critical': return 'bg-red-500 text-white';
+      case 'warning': return 'bg-amber-500 text-white';
+      default: return 'bg-yellow-500 text-white';
     }
   };
 
+  const anomalyRate = totalReadings > 0 ? ((anomalyCount / totalReadings) * 100).toFixed(2) : '0.00';
+
   return (
-    <div className="min-h-screen bg-slate-50 p-8 dark:bg-slate-950">
-      <div className="mx-auto max-w-7xl space-y-8">
-        
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
-              Endüstriyel Anomali Tespit Sistemi
-            </h1>
-            <p className="text-slate-500 dark:text-slate-400">
-              Gerçek zamanlı sensör verisi izleme ve anomali tespiti
-            </p>
-          </div>
-          <div className="flex items-center gap-4">
-            <Badge variant={isConnected ? "default" : "destructive"} className="h-8 px-4 text-sm">
-              {isConnected ? "🟢 Bağlı" : "🔴 Bağlantı Kesildi"}
-            </Badge>
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+      {/* Header */}
+      <header className="sticky top-0 z-50 border-b border-slate-700/50 bg-slate-900/80 backdrop-blur-xl">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="flex h-16 items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-cyan-500 shadow-lg shadow-blue-500/25">
+                <Activity className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <h1 className="text-lg font-bold text-white">CountSort Anomali Tespiti</h1>
+                <p className="text-xs text-slate-400">Gerçek Zamanlı İzleme Sistemi</p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-3">
+              <Badge 
+                className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium ${
+                  isConnected 
+                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
+                    : 'bg-red-500/10 text-red-400 border-red-500/30'
+                }`}
+              >
+                {isConnected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
+                {isConnected ? "Bağlı" : "Bağlantı Kesildi"}
+              </Badge>
+            </div>
           </div>
         </div>
+      </header>
 
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         {/* Tab Navigation */}
-        <div className="flex gap-2 border-b border-slate-200 dark:border-slate-800">
-          <Button
-            variant={activeTab === 'dashboard' ? 'default' : 'ghost'}
-            onClick={() => setActiveTab('dashboard')}
-            className="rounded-b-none"
-          >
-            <Activity className="mr-2 h-4 w-4" />
-            Dashboard
-          </Button>
-          <Button
-            variant={activeTab === 'anomaly-logs' ? 'default' : 'ghost'}
-            onClick={() => setActiveTab('anomaly-logs')}
-            className="rounded-b-none"
-          >
-            <AlertTriangle className="mr-2 h-4 w-4" />
-            Anomali Logları ({anomalyHistory.length})
-          </Button>
-          <Button
-            variant={activeTab === 'data-logs' ? 'default' : 'ghost'}
-            onClick={() => setActiveTab('data-logs')}
-            className="rounded-b-none"
-          >
-            <Database className="mr-2 h-4 w-4" />
-            Tüm Veri Logları ({allDataLogs.length})
-          </Button>
-          <Button
-            variant={activeTab === 'settings' ? 'default' : 'ghost'}
-            onClick={() => setActiveTab('settings')}
-            className="rounded-b-none"
-          >
-            <Settings className="mr-2 h-4 w-4" />
-            Ayarlar
-          </Button>
+        <div className="mb-6 flex flex-wrap gap-2 rounded-xl bg-slate-800/50 p-1.5">
+          {[
+            { id: 'dashboard', label: 'Dashboard', icon: Activity },
+            { id: 'anomaly-logs', label: `Anomaliler (${anomalyHistory.length})`, icon: AlertTriangle },
+            { id: 'data-logs', label: `Tüm Veriler (${allDataLogs.length})`, icon: Database },
+            { id: 'settings', label: 'Ayarlar', icon: Settings },
+          ].map((tab) => (
+            <Button
+              key={tab.id}
+              variant="ghost"
+              size="sm"
+              onClick={() => setActiveTab(tab.id as typeof activeTab)}
+              className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all ${
+                activeTab === tab.id
+                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
+                  : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'
+              }`}
+            >
+              <tab.icon className="h-4 w-4" />
+              <span className="hidden sm:inline">{tab.label}</span>
+            </Button>
+          ))}
         </div>
 
         {/* Dashboard Tab */}
         {activeTab === 'dashboard' && (
-          <div className="space-y-8">
-            {/* Fleet View - Sensor Cards */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-              {Object.entries(sensorStats).map(([sensor, stats]) => (
-                <Card 
-                  key={sensor}
-                  className={`cursor-pointer transition-all hover:shadow-md ${selectedSensor === sensor ? 'ring-2 ring-blue-500' : ''}`}
-                  onClick={() => setSelectedSensor(sensor)}
-                >
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">
-                      {sensor}
-                    </CardTitle>
-                    {stats.is_anomaly ? (
-                      <AlertTriangle className="h-4 w-4 text-red-500" />
-                    ) : (
-                      <Activity className="h-4 w-4 text-slate-500" />
-                    )}
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold">{stats.current.toFixed(2)}</div>
-                    <div className="flex items-center justify-between mt-1">
-                      <p className="text-xs text-slate-500">
-                        Z-Score: <span className={Math.abs(stats.z_score) > 3 ? "text-red-500 font-bold" : ""}>{stats.z_score.toFixed(2)}</span>
-                      </p>
-                      <Badge variant={stats.is_anomaly ? "destructive" : "secondary"} className="text-[10px] h-5">
-                        {stats.is_anomaly ? "ANOMALİ" : "NORMAL"}
-                      </Badge>
+          <div className="space-y-6">
+            {/* Stats Cards */}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-medium text-slate-400">Toplam Okuma</p>
+                      <p className="mt-1 text-2xl font-bold text-white">{totalReadings.toLocaleString()}</p>
                     </div>
-                    {/* Sparkline */}
-                    <div className="h-[40px] mt-3">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={sensorHistory[sensor] || []}>
-                          <Line 
-                            type="monotone" 
-                            dataKey="value" 
-                            stroke={stats.is_anomaly ? "#ef4444" : "#2563eb"} 
-                            strokeWidth={2} 
-                            dot={false} 
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">
+                      <TrendingUp className="h-5 w-5 text-blue-400" />
                     </div>
-                  </CardContent>
-                </Card>
-              ))}
-              
-              {/* Summary Cards */}
-              <Card className="bg-slate-50 dark:bg-slate-900 border-dashed">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-slate-500">Sistem Özeti</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>Toplam Okuma:</span>
-                      <span className="font-bold">{totalReadings}</span>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-medium text-slate-400">Anomali Sayısı</p>
+                      <p className="mt-1 text-2xl font-bold text-red-400">{anomalyCount}</p>
                     </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Anomali:</span>
-                      <span className="font-bold text-red-600">{anomalyCount}</span>
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/10">
+                      <AlertTriangle className="h-5 w-5 text-red-400" />
                     </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Aktif Sensör:</span>
-                      <span className="font-bold">{Object.keys(sensorStats).length}</span>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-medium text-slate-400">Anomali Oranı</p>
+                      <p className="mt-1 text-2xl font-bold text-amber-400">%{anomalyRate}</p>
+                    </div>
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500/10">
+                      <Zap className="h-5 w-5 text-amber-400" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-medium text-slate-400">Aktif Sensör</p>
+                      <p className="mt-1 text-2xl font-bold text-emerald-400">{Object.keys(sensorStats).length}</p>
+                    </div>
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10">
+                      <Activity className="h-5 w-5 text-emerald-400" />
                     </div>
                   </div>
                 </CardContent>
               </Card>
             </div>
 
-            {/* Detailed Analysis */}
-            <div className="grid gap-8 md:grid-cols-3">
-              
-              {/* Main Control Chart */}
-              <Card className="col-span-2">
+            {/* Sensor Grid */}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {Object.entries(sensorStats).map(([sensor, stats]) => (
+                <Card 
+                  key={sensor}
+                  onClick={() => setSelectedSensor(sensor)}
+                  className={`cursor-pointer border-slate-700/50 bg-slate-800/50 backdrop-blur transition-all hover:border-slate-600 hover:bg-slate-800 ${
+                    selectedSensor === sensor ? 'ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-900' : ''
+                  }`}
+                >
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-sm font-medium text-slate-300">{sensor}</CardTitle>
+                      <Badge 
+                        className={`text-[10px] ${
+                          stats.is_anomaly 
+                            ? 'bg-red-500/10 text-red-400 border-red-500/30' 
+                            : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                        }`}
+                      >
+                        {stats.is_anomaly ? "ANOMALİ" : "NORMAL"}
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex items-end justify-between">
+                      <div>
+                        <p className="text-3xl font-bold text-white">{stats.current.toFixed(2)}</p>
+                        <p className="text-xs text-slate-400">
+                          Z-Score: <span className={stats.is_anomaly ? "text-red-400 font-semibold" : "text-slate-400"}>{stats.z_score.toFixed(2)}</span>
+                        </p>
+                      </div>
+                      <div className="h-12 w-24">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={sensorHistory[sensor] || []}>
+                            <Line 
+                              type="monotone" 
+                              dataKey="value" 
+                              stroke={stats.is_anomaly ? "#ef4444" : "#3b82f6"} 
+                              strokeWidth={2} 
+                              dot={false} 
+                            />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+
+              {Object.keys(sensorStats).length === 0 && (
+                <Card className="col-span-full border-slate-700/50 bg-slate-800/50 backdrop-blur border-dashed">
+                  <CardContent className="flex flex-col items-center justify-center py-12">
+                    <Clock className="h-12 w-12 text-slate-500 mb-4" />
+                    <p className="text-slate-400 text-center">Sensör verisi bekleniyor...</p>
+                    <p className="text-slate-500 text-sm text-center mt-1">Veri gönderimi başladığında sensörler burada görünecek</p>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+
+            {/* Main Chart & Side Panel */}
+            <div className="grid gap-6 lg:grid-cols-3">
+              {/* Main Chart */}
+              <Card className="lg:col-span-2 border-slate-700/50 bg-slate-800/50 backdrop-blur">
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <div>
-                      <CardTitle className="flex items-center gap-2">
-                        <Activity className="h-5 w-5" />
-                        {selectedSensor ? `${selectedSensor} - Kontrol Grafiği` : 'Sensör Analizi'}
+                      <CardTitle className="text-white flex items-center gap-2">
+                        <Activity className="h-5 w-5 text-blue-400" />
+                        {selectedSensor ? `${selectedSensor} - Kontrol Grafiği` : 'Sensör Grafiği'}
                       </CardTitle>
-                      <CardDescription>
-                        {selectedSensor 
-                          ? '3-Sigma kontrol limitleri ve anomali noktaları' 
-                          : 'Detaylı analiz için yukarıdan bir sensör seçin'}
+                      <CardDescription className="text-slate-400">
+                        {selectedSensor ? 'Gerçek zamanlı değer takibi ve anomali noktaları' : 'Detaylı görüntü için bir sensör seçin'}
                       </CardDescription>
                     </div>
                     {selectedSensor && (
-                      <Badge variant="outline" className="font-mono">
-                        {sensorHistory[selectedSensor]?.length || 0} Veri Noktası
+                      <Badge variant="outline" className="border-slate-600 text-slate-300">
+                        {sensorHistory[selectedSensor]?.length || 0} veri
                       </Badge>
                     )}
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {!selectedSensor ? (
-                    <div className="h-[400px] w-full flex items-center justify-center text-slate-400 bg-slate-50/50 dark:bg-slate-900/50 rounded-lg border border-dashed">
+                  {!selectedSensor || !sensorHistory[selectedSensor]?.length ? (
+                    <div className="flex h-80 items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-800/30">
                       <div className="text-center">
-                        <Activity className="h-12 w-12 mx-auto mb-2 opacity-50" />
-                        <p>Analiz etmek için bir sensör seçin</p>
+                        <Activity className="mx-auto h-12 w-12 text-slate-600" />
+                        <p className="mt-2 text-slate-500">Grafik için sensör seçin</p>
                       </div>
                     </div>
                   ) : (
-                    <div className="h-[400px] w-full">
+                    <div className="h-80">
                       <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart data={sensorHistory[selectedSensor] || []}>
-                          <CartesianGrid strokeDasharray="3 3" className="stroke-slate-200 dark:stroke-slate-700" />
-                          <XAxis 
-                            dataKey="time" 
-                            tick={{ fontSize: 10 }}
-                            interval="preserveStartEnd"
-                          />
-                          <YAxis domain={['auto', 'auto']} />
+                        <ComposedChart data={sensorHistory[selectedSensor]}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                          <XAxis dataKey="time" tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                          <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} />
                           <Tooltip 
                             contentStyle={{ 
-                              backgroundColor: 'rgba(255, 255, 255, 0.95)', 
-                              borderRadius: '8px', 
-                              border: '1px solid #e2e8f0',
-                              boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' 
+                              backgroundColor: '#1e293b', 
+                              border: '1px solid #334155',
+                              borderRadius: '8px',
+                              color: '#f8fafc'
                             }}
                           />
                           <Legend />
-                          
-                          {/* 3-Sigma Area (Mean +/- 3 StdDev approx) */}
-                          <Area 
-                            type="monotone" 
-                            dataKey="threshold" 
-                            fill="#f1f5f9" 
-                            stroke="none" 
-                            name="Normal Aralık"
-                          />
-                          
-                          <Line 
-                            type="monotone" 
-                            dataKey="value" 
-                            stroke="#2563eb" 
-                            strokeWidth={2} 
-                            dot={false}
-                            name="Değer"
-                          />
-                          
-                          <Line 
-                            type="monotone" 
-                            dataKey="mean" 
-                            stroke="#10b981" 
-                            strokeWidth={1}
-                            strokeDasharray="5 5" 
-                            dot={false}
-                            name="Ortalama"
-                          />
-                          
-                          <Line 
-                            type="monotone" 
-                            dataKey="anomaly" 
-                            stroke="#ef4444" 
-                            strokeWidth={0}
-                            dot={{ r: 6, fill: '#ef4444', strokeWidth: 2, stroke: '#fff' }}
-                            name="Anomali"
-                          />
+                          <Area type="monotone" dataKey="threshold" fill="#3b82f620" stroke="none" name="Eşik" />
+                          <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} dot={false} name="Değer" />
+                          <Line type="monotone" dataKey="mean" stroke="#22c55e" strokeWidth={1} strokeDasharray="5 5" dot={false} name="Ortalama" />
+                          <Line type="monotone" dataKey="anomaly" stroke="#ef4444" strokeWidth={0} dot={{ r: 5, fill: '#ef4444' }} name="Anomali" />
                         </ComposedChart>
                       </ResponsiveContainer>
                     </div>
@@ -556,27 +557,26 @@ export default function Dashboard() {
                 </CardContent>
               </Card>
 
-              {/* Side Panel - Gauge & Stats */}
+              {/* Side Panel */}
               <div className="space-y-6">
-                
                 {/* Z-Score Gauge */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Gauge className="h-5 w-5" />
-                      Anomali Skoru (Z-Score)
+                <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-white flex items-center gap-2 text-base">
+                      <Gauge className="h-4 w-4 text-blue-400" />
+                      Z-Score Göstergesi
                     </CardTitle>
                   </CardHeader>
-                  <CardContent className="flex flex-col items-center justify-center py-6">
+                  <CardContent>
                     {selectedSensor && sensorStats[selectedSensor] ? (
-                      <>
-                        <div className="relative flex items-center justify-center">
-                          <PieChart width={200} height={100}>
+                      <div className="flex flex-col items-center">
+                        <div className="relative h-24 w-48">
+                          <PieChart width={192} height={96}>
                             <Pie
                               data={[
-                                { value: 3, fill: '#22c55e' },  // Normal
-                                { value: 2, fill: '#eab308' },  // Warning
-                                { value: 1, fill: '#ef4444' },  // Critical
+                                { value: 2, fill: '#22c55e' },
+                                { value: 1, fill: '#eab308' },
+                                { value: 1, fill: '#ef4444' },
                               ]}
                               cx="50%"
                               cy="100%"
@@ -589,79 +589,70 @@ export default function Dashboard() {
                               stroke="none"
                             />
                           </PieChart>
-                          <div className="absolute bottom-0 text-center">
-                            <div className="text-3xl font-bold">
+                          <div className="absolute inset-x-0 bottom-0 text-center">
+                            <p className="text-3xl font-bold text-white">
                               {Math.abs(sensorStats[selectedSensor].z_score).toFixed(1)}
-                            </div>
-                            <div className="text-xs text-slate-500">Z-Score</div>
+                            </p>
                           </div>
                         </div>
-                        <div className="mt-4 text-center">
-                          <Badge variant={sensorStats[selectedSensor].is_anomaly ? "destructive" : "outline"} className="text-sm px-4 py-1">
-                            {sensorStats[selectedSensor].is_anomaly ? "KRİTİK SEVİYE" : "NORMAL SEVİYE"}
-                          </Badge>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="text-slate-400 text-center py-8">
-                        <p>Sensör seçilmedi</p>
+                        <Badge className={`mt-2 ${sensorStats[selectedSensor].is_anomaly ? 'bg-red-500' : 'bg-emerald-500'}`}>
+                          {sensorStats[selectedSensor].is_anomaly ? "KRİTİK" : "NORMAL"}
+                        </Badge>
                       </div>
+                    ) : (
+                      <p className="py-8 text-center text-slate-500">Sensör seçilmedi</p>
                     )}
                   </CardContent>
                 </Card>
 
                 {/* Anomaly Distribution */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <PieIcon className="h-5 w-5" />
-                      Anomali Dağılımı
+                <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-white flex items-center gap-2 text-base">
+                      <PieIcon className="h-4 w-4 text-blue-400" />
+                      Dağılım
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="h-[200px]">
+                    <div className="h-40">
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie
                             data={[
-                              { name: 'Normal', value: totalReadings - anomalyCount, fill: '#22c55e' },
-                              { name: 'Anomali', value: anomalyCount, fill: '#ef4444' },
+                              { name: 'Normal', value: totalReadings - anomalyCount },
+                              { name: 'Anomali', value: anomalyCount },
                             ]}
                             cx="50%"
                             cy="50%"
-                            innerRadius={60}
-                            outerRadius={80}
+                            innerRadius={40}
+                            outerRadius={60}
                             paddingAngle={5}
                             dataKey="value"
                           >
-                            <Cell key="normal" fill="#22c55e" />
-                            <Cell key="anomaly" fill="#ef4444" />
+                            <Cell fill="#22c55e" />
+                            <Cell fill="#ef4444" />
                           </Pie>
-                          <Tooltip />
-                          <Legend verticalAlign="bottom" height={36}/>
+                          <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }} />
+                          <Legend />
                         </PieChart>
                       </ResponsiveContainer>
                     </div>
                   </CardContent>
                 </Card>
 
-                {/* System Controls */}
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">Hızlı İşlemler</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
+                {/* Quick Actions */}
+                <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
+                  <CardContent className="p-4">
                     <Button 
-                      className="w-full" 
-                      variant="outline"
                       onClick={resetSystem}
-                      size="sm"
+                      variant="outline"
+                      className="w-full border-slate-600 text-slate-300 hover:bg-slate-700"
                     >
-                      <RefreshCw className="mr-2 h-4 w-4" /> Sistemi Sıfırla
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      Sistemi Sıfırla
                     </Button>
                   </CardContent>
                 </Card>
-
               </div>
             </div>
           </div>
@@ -669,56 +660,54 @@ export default function Dashboard() {
 
         {/* Anomaly Logs Tab */}
         {activeTab === 'anomaly-logs' && (
-          <Card>
+          <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <AlertTriangle className="h-5 w-5 text-red-500" />
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5 text-red-400" />
                     Anomali Logları
                   </CardTitle>
-                  <CardDescription>
+                  <CardDescription className="text-slate-400">
                     Tespit edilen tüm anomalilerin detaylı kayıtları
                   </CardDescription>
                 </div>
-                <Button onClick={fetchAnomalyHistory} variant="outline" size="sm">
+                <Button onClick={fetchAnomalyHistory} variant="outline" size="sm" className="border-slate-600 text-slate-300">
                   <RefreshCw className="mr-2 h-4 w-4" /> Yenile
                 </Button>
               </div>
             </CardHeader>
             <CardContent>
               {anomalyHistory.length === 0 ? (
-                <div className="text-center py-12 text-slate-400">
-                  <AlertTriangle className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>Henüz anomali kaydı bulunmuyor</p>
+                <div className="py-12 text-center">
+                  <AlertTriangle className="mx-auto h-12 w-12 text-slate-600" />
+                  <p className="mt-4 text-slate-400">Henüz anomali kaydı bulunmuyor</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead className="border-b bg-slate-50 dark:bg-slate-900">
-                      <tr>
-                        <th className="px-4 py-3 text-left font-medium">Zaman</th>
-                        <th className="px-4 py-3 text-left font-medium">Sensör Tipi</th>
-                        <th className="px-4 py-3 text-right font-medium">Değer</th>
-                        <th className="px-4 py-3 text-right font-medium">Z-Score</th>
-                        <th className="px-4 py-3 text-center font-medium">Seviye</th>
-                        <th className="px-4 py-3 text-left font-medium">Açıklama</th>
+                    <thead>
+                      <tr className="border-b border-slate-700">
+                        <th className="px-4 py-3 text-left font-medium text-slate-400">Zaman</th>
+                        <th className="px-4 py-3 text-left font-medium text-slate-400">Sensör</th>
+                        <th className="px-4 py-3 text-right font-medium text-slate-400">Değer</th>
+                        <th className="px-4 py-3 text-right font-medium text-slate-400">Z-Score</th>
+                        <th className="px-4 py-3 text-center font-medium text-slate-400">Seviye</th>
+                        <th className="px-4 py-3 text-left font-medium text-slate-400 hidden lg:table-cell">Açıklama</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y">
+                    <tbody className="divide-y divide-slate-700/50">
                       {anomalyHistory.map((anomaly, index) => (
-                        <tr key={index} className="hover:bg-slate-50 dark:hover:bg-slate-900">
-                          <td className="px-4 py-3 text-slate-600 dark:text-slate-300 font-mono text-xs">
+                        <tr key={index} className="hover:bg-slate-700/30">
+                          <td className="px-4 py-3 font-mono text-xs text-slate-300">
                             {formatTimestamp(anomaly.timestamp)}
                           </td>
-                          <td className="px-4 py-3 font-medium">
-                            {anomaly.sensor_type}
-                          </td>
-                          <td className="px-4 py-3 text-right font-mono">
+                          <td className="px-4 py-3 text-slate-200">{anomaly.sensor_type}</td>
+                          <td className="px-4 py-3 text-right font-mono text-slate-200">
                             {anomaly.current_value.toFixed(2)}
-                            {anomaly.unit && <span className="text-xs text-slate-500 ml-1">{anomaly.unit}</span>}
+                            {anomaly.unit && <span className="ml-1 text-slate-500">{anomaly.unit}</span>}
                           </td>
-                          <td className="px-4 py-3 text-right font-mono font-bold text-red-600">
+                          <td className="px-4 py-3 text-right font-mono font-bold text-red-400">
                             {anomaly.z_score.toFixed(2)}
                           </td>
                           <td className="px-4 py-3 text-center">
@@ -726,7 +715,7 @@ export default function Dashboard() {
                               {anomaly.severity}
                             </Badge>
                           </td>
-                          <td className="px-4 py-3 text-xs text-slate-600 dark:text-slate-400">
+                          <td className="px-4 py-3 text-xs text-slate-400 hidden lg:table-cell">
                             {anomaly.message}
                           </td>
                         </tr>
@@ -739,84 +728,71 @@ export default function Dashboard() {
           </Card>
         )}
 
-        {/* All Data Logs Tab */}
+        {/* Data Logs Tab */}
         {activeTab === 'data-logs' && (
-          <Card>
+          <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <Database className="h-5 w-5 text-blue-500" />
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <Database className="h-5 w-5 text-blue-400" />
                     Tüm Veri Logları
                   </CardTitle>
-                  <CardDescription>
-                    Sisteme gelen tüm sensör verilerinin kayıtları (normal + anomali)
+                  <CardDescription className="text-slate-400">
+                    Sisteme gelen tüm sensör verilerinin kayıtları
                   </CardDescription>
                 </div>
-                <Button onClick={fetchAllDataLogs} variant="outline" size="sm">
+                <Button onClick={fetchAllDataLogs} variant="outline" size="sm" className="border-slate-600 text-slate-300">
                   <RefreshCw className="mr-2 h-4 w-4" /> Yenile
                 </Button>
               </div>
             </CardHeader>
             <CardContent>
               {allDataLogs.length === 0 ? (
-                <div className="text-center py-12 text-slate-400">
-                  <Database className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>Henüz veri kaydı bulunmuyor</p>
+                <div className="py-12 text-center">
+                  <Database className="mx-auto h-12 w-12 text-slate-600" />
+                  <p className="mt-4 text-slate-400">Henüz veri kaydı bulunmuyor</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead className="border-b bg-slate-50 dark:bg-slate-900">
-                      <tr>
-                        <th className="px-4 py-3 text-left font-medium">Zaman</th>
-                        <th className="px-4 py-3 text-left font-medium">Sensör Tipi</th>
-                        <th className="px-4 py-3 text-right font-medium">Değer</th>
-                        <th className="px-4 py-3 text-right font-medium">Ortalama</th>
-                        <th className="px-4 py-3 text-right font-medium">Std Dev</th>
-                        <th className="px-4 py-3 text-right font-medium">Z-Score</th>
-                        <th className="px-4 py-3 text-center font-medium">Durum</th>
+                    <thead>
+                      <tr className="border-b border-slate-700">
+                        <th className="px-4 py-3 text-left font-medium text-slate-400">Zaman</th>
+                        <th className="px-4 py-3 text-left font-medium text-slate-400">Sensör</th>
+                        <th className="px-4 py-3 text-right font-medium text-slate-400">Değer</th>
+                        <th className="px-4 py-3 text-right font-medium text-slate-400 hidden sm:table-cell">Ortalama</th>
+                        <th className="px-4 py-3 text-right font-medium text-slate-400 hidden md:table-cell">Std Dev</th>
+                        <th className="px-4 py-3 text-right font-medium text-slate-400">Z-Score</th>
+                        <th className="px-4 py-3 text-center font-medium text-slate-400">Durum</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y">
+                    <tbody className="divide-y divide-slate-700/50">
                       {allDataLogs.map((log, index) => (
                         <tr 
                           key={index} 
-                          className={`hover:bg-slate-50 dark:hover:bg-slate-900 ${
-                            log.is_anomaly ? 'bg-red-50 dark:bg-red-900/10' : ''
-                          }`}
+                          className={`hover:bg-slate-700/30 ${log.is_anomaly ? 'bg-red-900/10' : ''}`}
                         >
-                          <td className="px-4 py-3 text-slate-600 dark:text-slate-300 font-mono text-xs">
+                          <td className="px-4 py-3 font-mono text-xs text-slate-300">
                             {formatTimestamp(log.timestamp)}
                           </td>
-                          <td className="px-4 py-3 font-medium">
-                            {log.sensor_type}
-                          </td>
-                          <td className="px-4 py-3 text-right font-mono font-bold">
+                          <td className="px-4 py-3 text-slate-200">{log.sensor_type}</td>
+                          <td className="px-4 py-3 text-right font-mono font-bold text-slate-200">
                             {log.current_value.toFixed(2)}
-                            {log.unit && <span className="text-xs text-slate-500 ml-1">{log.unit}</span>}
                           </td>
-                          <td className="px-4 py-3 text-right font-mono text-slate-600">
+                          <td className="px-4 py-3 text-right font-mono text-slate-400 hidden sm:table-cell">
                             {log.mean.toFixed(2)}
                           </td>
-                          <td className="px-4 py-3 text-right font-mono text-slate-600">
+                          <td className="px-4 py-3 text-right font-mono text-slate-400 hidden md:table-cell">
                             {log.std_dev.toFixed(2)}
                           </td>
-                          <td className={`px-4 py-3 text-right font-mono font-bold ${
-                            log.is_anomaly ? 'text-red-600' : 'text-slate-600'
-                          }`}>
+                          <td className={`px-4 py-3 text-right font-mono font-bold ${log.is_anomaly ? 'text-red-400' : 'text-slate-400'}`}>
                             {log.z_score.toFixed(2)}
                           </td>
                           <td className="px-4 py-3 text-center">
-                            {log.is_anomaly ? (
-                              <Badge variant="destructive" className="text-xs">
-                                ⚠️ Anomali
-                              </Badge>
-                            ) : (
-                              <Badge variant="secondary" className="text-xs">
-                                ✓ Normal
-                              </Badge>
-                            )}
+                            <Badge className={log.is_anomaly ? 'bg-red-500' : 'bg-emerald-500'}>
+                              {log.is_anomaly ? "Anomali" : "Normal"}
+                            </Badge>
                           </td>
                         </tr>
                       ))}
@@ -830,182 +806,189 @@ export default function Dashboard() {
 
         {/* Settings Tab */}
         {activeTab === 'settings' && (
-          <div className="grid gap-8 md:grid-cols-2">
-            <Card>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Settings className="h-5 w-5" />
+                <CardTitle className="text-white flex items-center gap-2">
+                  <Settings className="h-5 w-5 text-blue-400" />
                   Sistem Ayarları
                 </CardTitle>
-                <CardDescription>
-                  Makine operatörleri için basitleştirilmiş anomali tespit ayarları.
+                <CardDescription className="text-slate-400">
+                  Anomali tespit parametrelerini buradan ayarlayabilirsiniz
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                
+                {configSaved && (
+                  <Alert className="border-emerald-500/30 bg-emerald-500/10">
+                    <AlertTitle className="text-emerald-400">Başarılı!</AlertTitle>
+                    <AlertDescription className="text-emerald-300">Ayarlar kaydedildi ve uygulandı.</AlertDescription>
+                  </Alert>
+                )}
+
                 <div className="space-y-2">
-                  <Label htmlFor="z_score_threshold" className="text-base font-semibold">Hassasiyet Seviyesi</Label>
-                  <div className="flex items-center gap-4">
+                  <Label htmlFor="z_score" className="text-slate-300 font-medium">Hassasiyet Seviyesi (Z-Score Eşiği)</Label>
+                  <div className="flex items-center gap-3">
                     <Input 
-                      id="z_score_threshold" 
+                      id="z_score"
                       type="number" 
                       step="0.1"
-                      className="w-24"
+                      className="w-28 bg-slate-700 border-slate-600 text-white"
                       value={config.z_score_threshold} 
-                      onChange={(e) => setConfig({...config, z_score_threshold: parseFloat(e.target.value)})}
+                      onChange={(e) => setConfig({...config, z_score_threshold: parseFloat(e.target.value) || 0})}
                     />
-                    <span className="text-sm text-slate-500">
-                      (Önerilen: 2.0 - 3.0 arası)
-                    </span>
+                    <span className="text-sm text-slate-400">Önerilen: 2.0 - 3.5</span>
                   </div>
-                  <p className="text-sm text-slate-500 bg-slate-100 dark:bg-slate-900 p-3 rounded-md">
-                    Bu değer düştükçe sistem en ufak değişimlere bile alarm verir (Hassas). 
-                    Değer yükseldikçe sadece çok büyük hatalarda alarm verir (Kaba).
+                  <p className="text-xs text-slate-500">
+                    Düşük değer = Hassas (çok alarm), Yüksek değer = Toleranslı (az alarm)
                   </p>
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="window_size" className="text-base font-semibold">Analiz Penceresi (Son Veriler)</Label>
+                  <Label htmlFor="window" className="text-slate-300 font-medium">Analiz Penceresi</Label>
                   <Input 
-                    id="window_size" 
+                    id="window"
                     type="number" 
+                    className="bg-slate-700 border-slate-600 text-white"
                     value={config.window_size} 
-                    onChange={(e) => setConfig({...config, window_size: parseInt(e.target.value)})}
+                    onChange={(e) => setConfig({...config, window_size: parseInt(e.target.value) || 0})}
                   />
-                  <p className="text-sm text-slate-500">
-                    Sistemin "Normal" kabul ettiği durumu belirlemek için geriye dönük kaç adet veriye bakacağını belirler.
+                  <p className="text-xs text-slate-500">
+                    Sistem kaç veri noktasını referans alarak normal durumu belirlesin
                   </p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="min_training_size">Öğrenme Süresi</Label>
+                    <Label htmlFor="training" className="text-slate-300">Öğrenme Süresi</Label>
                     <Input 
-                      id="min_training_size" 
+                      id="training"
                       type="number" 
+                      className="bg-slate-700 border-slate-600 text-white"
                       value={config.min_training_size} 
-                      onChange={(e) => setConfig({...config, min_training_size: parseInt(e.target.value)})}
+                      onChange={(e) => setConfig({...config, min_training_size: parseInt(e.target.value) || 0})}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="min_data_points">Min. Veri</Label>
+                    <Label htmlFor="mindata" className="text-slate-300">Min. Veri</Label>
                     <Input 
-                      id="min_data_points" 
+                      id="mindata"
                       type="number" 
+                      className="bg-slate-700 border-slate-600 text-white"
                       value={config.min_data_points} 
-                      onChange={(e) => setConfig({...config, min_data_points: parseInt(e.target.value)})}
+                      onChange={(e) => setConfig({...config, min_data_points: parseInt(e.target.value) || 0})}
                     />
                   </div>
                 </div>
-                <p className="text-xs text-slate-400">
-                  *Öğrenme süresi ve min. veri, sistemin ilk açılışta ne kadar süre veri toplayıp analiz yapmaya başlayacağını belirler.
-                </p>
 
                 <div className="space-y-2">
-                  <Label htmlFor="alert_message">Alarm Mesajı</Label>
+                  <Label htmlFor="alert" className="text-slate-300">Alarm Mesajı</Label>
                   <Input 
-                    id="alert_message" 
+                    id="alert"
                     type="text" 
+                    className="bg-slate-700 border-slate-600 text-white"
                     value={config.alert_message} 
                     onChange={(e) => setConfig({...config, alert_message: e.target.value})}
                   />
                 </div>
 
-                <Button onClick={updateConfig} className="w-full mt-4 bg-blue-600 hover:bg-blue-700">
-                  <Settings className="mr-2 h-4 w-4" /> Ayarları Kaydet ve Uygula
+                <Button onClick={updateConfig} className="w-full bg-blue-600 hover:bg-blue-700">
+                  <Settings className="mr-2 h-4 w-4" />
+                  Ayarları Kaydet
                 </Button>
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
               <CardHeader>
-                <CardTitle>Otomatik Modlar</CardTitle>
-                <CardDescription>
-                  Tek tıkla makine çalışma prensibine uygun ayarları yükleyin.
+                <CardTitle className="text-white">Hazır Profiller</CardTitle>
+                <CardDescription className="text-slate-400">
+                  Tek tıkla optimize edilmiş ayarları yükleyin
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid gap-4">
-                  <Button 
-                    variant="outline" 
-                    className={`justify-start h-auto py-4 px-4 border-2 ${config.z_score_threshold < 2.0 ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-transparent'}`}
-                    onClick={() => setConfig({
-                      ...config,
-                      z_score_threshold: 1.8,
-                      window_size: 50,
-                      min_data_points: 10,
-                      min_training_size: 20
-                    })}
-                  >
-                    <div className="text-left w-full">
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold text-lg">Hassas Mod</span>
-                        <Badge variant="secondary">Yüksek Dikkat</Badge>
-                      </div>
-                      <div className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-                        En ufak titreşim veya basınç değişimini yakalar. Kalite kontrolün çok sıkı olduğu durumlar için.
-                      </div>
+              <CardContent className="space-y-3">
+                <Button 
+                  variant="outline"
+                  className={`w-full h-auto py-4 justify-start border-2 transition-all ${
+                    config.z_score_threshold < 2.0 
+                      ? 'border-blue-500 bg-blue-500/10' 
+                      : 'border-slate-600 hover:border-slate-500'
+                  }`}
+                  onClick={() => setConfig({
+                    ...config,
+                    z_score_threshold: 1.8,
+                    window_size: 50,
+                    min_data_points: 10,
+                    min_training_size: 20
+                  })}
+                >
+                  <div className="text-left">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-white">🎯 Hassas Mod</span>
+                      <Badge className="bg-blue-500/20 text-blue-300 border-blue-500/30">Yüksek Dikkat</Badge>
                     </div>
-                  </Button>
+                    <p className="text-xs text-slate-400 mt-1">En ufak değişimi yakalar. Kalite kontrol için ideal.</p>
+                  </div>
+                </Button>
 
-                  <Button 
-                    variant="outline" 
-                    className={`justify-start h-auto py-4 px-4 border-2 ${config.z_score_threshold >= 2.0 && config.z_score_threshold <= 3.0 ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-transparent'}`}
-                    onClick={() => setConfig({
-                      ...config,
-                      z_score_threshold: 2.5,
-                      window_size: 100,
-                      min_data_points: 20,
-                      min_training_size: 50
-                    })}
-                  >
-                    <div className="text-left w-full">
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold text-lg">Dengeli Mod</span>
-                        <Badge className="bg-green-600">Önerilen</Badge>
-                      </div>
-                      <div className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-                        Standart üretim hattı. Yanlış alarmları minimize ederken gerçek hataları kaçırmaz.
-                      </div>
+                <Button 
+                  variant="outline"
+                  className={`w-full h-auto py-4 justify-start border-2 transition-all ${
+                    config.z_score_threshold >= 2.0 && config.z_score_threshold <= 3.0 
+                      ? 'border-emerald-500 bg-emerald-500/10' 
+                      : 'border-slate-600 hover:border-slate-500'
+                  }`}
+                  onClick={() => setConfig({
+                    ...config,
+                    z_score_threshold: 2.5,
+                    window_size: 100,
+                    min_data_points: 20,
+                    min_training_size: 50
+                  })}
+                >
+                  <div className="text-left">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-white">⚖️ Dengeli Mod</span>
+                      <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30">Önerilen</Badge>
                     </div>
-                  </Button>
+                    <p className="text-xs text-slate-400 mt-1">Standart üretim hattı için optimize edildi.</p>
+                  </div>
+                </Button>
 
-                  <Button 
-                    variant="outline" 
-                    className={`justify-start h-auto py-4 px-4 border-2 ${config.z_score_threshold > 3.0 ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20' : 'border-transparent'}`}
-                    onClick={() => setConfig({
-                      ...config,
-                      z_score_threshold: 3.5,
-                      window_size: 200,
-                      min_data_points: 50,
-                      min_training_size: 100
-                    })}
-                  >
-                    <div className="text-left w-full">
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold text-lg">Esnek Mod</span>
-                        <Badge variant="outline">Düşük Hassasiyet</Badge>
-                      </div>
-                      <div className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-                        Sadece makine durmasına sebep olabilecek çok büyük arızalarda alarm verir.
-                      </div>
+                <Button 
+                  variant="outline"
+                  className={`w-full h-auto py-4 justify-start border-2 transition-all ${
+                    config.z_score_threshold > 3.0 
+                      ? 'border-amber-500 bg-amber-500/10' 
+                      : 'border-slate-600 hover:border-slate-500'
+                  }`}
+                  onClick={() => setConfig({
+                    ...config,
+                    z_score_threshold: 3.5,
+                    window_size: 200,
+                    min_data_points: 50,
+                    min_training_size: 100
+                  })}
+                >
+                  <div className="text-left">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-white">🛡️ Esnek Mod</span>
+                      <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/30">Az Alarm</Badge>
                     </div>
-                  </Button>
-                </div>
-                
-                <Alert className="mt-6 bg-slate-100 dark:bg-slate-900 border-none">
-                  <AlertTitle className="text-xs font-bold uppercase text-slate-500">Bilgi</AlertTitle>
-                  <AlertDescription className="text-xs text-slate-500 mt-1">
-                    Seçtiğiniz mod, yukarıdaki ayarları otomatik olarak doldurur. İsterseniz değerleri manuel olarak değiştirebilirsiniz.
-                    Değişikliklerin aktif olması için "Ayarları Kaydet" butonuna basmayı unutmayın.
+                    <p className="text-xs text-slate-400 mt-1">Sadece büyük arızalarda alarm verir.</p>
+                  </div>
+                </Button>
+
+                <Alert className="mt-4 border-slate-600 bg-slate-700/50">
+                  <AlertTitle className="text-slate-300 text-xs uppercase">Not</AlertTitle>
+                  <AlertDescription className="text-slate-400 text-xs">
+                    Profil seçtikten sonra &quot;Ayarları Kaydet&quot; butonuna basarak değişiklikleri uygulayın.
                   </AlertDescription>
                 </Alert>
               </CardContent>
             </Card>
           </div>
         )}
-        
-      </div>
+      </main>
     </div>
   );
 }

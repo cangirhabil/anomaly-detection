@@ -1,6 +1,6 @@
 anomaly:
   alert_message: "\u26A0\uFE0F ANOMAL\u0130 TESP\u0130T ED\u0130LD\u0130!"
-  min_data_points: 30
+  min_data_points: 20
   min_training_size: 50
   sensors:
     acoustic_noise:
@@ -18,8 +18,8 @@ anomaly:
     vibration_level:
       min_training_size: 200
       threshold: 2.0
-  window_size: 200
-  z_score_threshold: 3.0
+  window_size: 100
+  z_score_threshold: 2.5
 cors:
   allow_methods:
   - GET
