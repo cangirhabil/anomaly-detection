@@ -36,6 +36,17 @@ interface AnomalyLog {
   unit?: string;
 }
 
+interface DataLog {
+  timestamp: string;
+  sensor_type: string;
+  current_value: number;
+  mean: number;
+  std_dev: number;
+  z_score: number;
+  is_anomaly: boolean;
+  unit?: string;
+}
+
 interface ChartDataPoint {
   time: string;
   value: number;
@@ -60,15 +71,21 @@ export default function Dashboard() {
   const [anomalyCount, setAnomalyCount] = useState(0);
   const [sensorStats, setSensorStats] = useState<SensorStats>({});
   const [anomalyHistory, setAnomalyHistory] = useState<AnomalyLog[]>([]);
+  const [allDataLogs, setAllDataLogs] = useState<DataLog[]>([]);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'anomaly-logs' | 'data-logs'>('dashboard');
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     connectWebSocket();
     fetchAnomalyHistory();
+    fetchAllDataLogs();
     
-    // Her 10 saniyede bir anomali geçmişini güncelle
-    const interval = setInterval(fetchAnomalyHistory, 10000);
+    // Her 10 saniyede bir logları güncelle
+    const interval = setInterval(() => {
+      fetchAnomalyHistory();
+      fetchAllDataLogs();
+    }, 10000);
     
     return () => {
       clearInterval(interval);
@@ -100,6 +117,21 @@ export default function Dashboard() {
             
             // Toplam okuma sayısını artır
             setTotalReadings(prev => prev + 1);
+            
+            // Tüm veri loglarına ekle
+            setAllDataLogs(prev => {
+              const newLog: DataLog = {
+                timestamp: reading.timestamp,
+                sensor_type: reading.sensor_type,
+                current_value: reading.current_value,
+                mean: reading.mean,
+                std_dev: reading.std_dev,
+                z_score: reading.z_score,
+                is_anomaly: reading.is_anomaly,
+                unit: reading.unit
+              };
+              return [newLog, ...prev].slice(0, 200); // Son 200 veri
+            });
             
             // Anomali sayacı
             if (reading.is_anomaly) {
@@ -171,7 +203,7 @@ export default function Dashboard() {
 
   const fetchAnomalyHistory = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/v1/logs/anomalies?limit=50');
+      const response = await fetch('http://localhost:8000/api/v1/logs/anomalies?limit=100');
       if (response.ok) {
         const data = await response.json();
         if (data.anomalies && data.anomalies.length > 0) {
@@ -180,6 +212,20 @@ export default function Dashboard() {
       }
     } catch (error) {
       console.error('Anomali geçmişi getirme hatası:', error);
+    }
+  };
+
+  const fetchAllDataLogs = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/logs/recent?limit=200');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.logs && data.logs.length > 0) {
+          setAllDataLogs(data.logs);
+        }
+      }
+    } catch (error) {
+      console.error('Veri logları getirme hatası:', error);
     }
   };
 
@@ -259,268 +305,404 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* İstatistikler */}
-        <div className="grid gap-4 md:grid-cols-3">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Toplam Okuma</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{totalReadings}</div>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Anomali Sayısı</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-red-600">{anomalyCount}</div>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Aktif Sensör</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{Object.keys(sensorStats).length}</div>
-            </CardContent>
-          </Card>
+        {/* Tab Navigation */}
+        <div className="flex gap-2 border-b border-slate-200 dark:border-slate-800">
+          <Button
+            variant={activeTab === 'dashboard' ? 'default' : 'ghost'}
+            onClick={() => setActiveTab('dashboard')}
+            className="rounded-b-none"
+          >
+            <Activity className="mr-2 h-4 w-4" />
+            Dashboard
+          </Button>
+          <Button
+            variant={activeTab === 'anomaly-logs' ? 'default' : 'ghost'}
+            onClick={() => setActiveTab('anomaly-logs')}
+            className="rounded-b-none"
+          >
+            <AlertTriangle className="mr-2 h-4 w-4" />
+            Anomali Logları ({anomalyHistory.length})
+          </Button>
+          <Button
+            variant={activeTab === 'data-logs' ? 'default' : 'ghost'}
+            onClick={() => setActiveTab('data-logs')}
+            className="rounded-b-none"
+          >
+            <Database className="mr-2 h-4 w-4" />
+            Tüm Veri Logları ({allDataLogs.length})
+          </Button>
         </div>
 
-        {/* Main Grid */}
-        <div className="grid gap-8 md:grid-cols-3">
-          
-          {/* Chart Section */}
-          <Card className="col-span-2">
+        {/* Dashboard Tab */}
+        {activeTab === 'dashboard' && (
+          <>
+            {/* İstatistikler */}
+            <div className="grid gap-4 md:grid-cols-3">
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium">Toplam Okuma</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{totalReadings}</div>
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium">Anomali Sayısı</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-red-600">{anomalyCount}</div>
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium">Aktif Sensör</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{Object.keys(sensorStats).length}</div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Main Grid */}
+            <div className="grid gap-8 md:grid-cols-3">
+              
+              {/* Chart Section */}
+              <Card className="col-span-2">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Activity className="h-5 w-5" />
+                    Gerçek Zamanlı Sensör Verileri
+                  </CardTitle>
+                  <CardDescription>
+                    {chartData.length > 0 ? `Son ${chartData.length} veri noktası` : 'Veri bekleniyor...'}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {chartData.length === 0 ? (
+                    <div className="h-[400px] w-full flex items-center justify-center text-slate-400">
+                      <div className="text-center">
+                        <Database className="h-12 w-12 mx-auto mb-2 opacity-50" />
+                        <p>Veri akışı bekleniyor...</p>
+                        <p className="text-sm mt-2">Terminal'den veri göndermeye başlayın</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="h-[400px] w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={chartData}>
+                          <CartesianGrid strokeDasharray="3 3" className="stroke-slate-200 dark:stroke-slate-700" />
+                          <XAxis 
+                            dataKey="time" 
+                            tick={{ fontSize: 10 }}
+                            interval="preserveStartEnd"
+                          />
+                          <YAxis />
+                          <Tooltip 
+                            contentStyle={{ 
+                              backgroundColor: 'rgba(255, 255, 255, 0.95)', 
+                              borderRadius: '8px', 
+                              border: '1px solid #e2e8f0',
+                              boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' 
+                            }}
+                          />
+                          <Legend />
+                          <Line 
+                            type="monotone" 
+                            dataKey="value" 
+                            stroke="#2563eb" 
+                            strokeWidth={2} 
+                            dot={false}
+                            name="Değer"
+                            isAnimationActive={false}
+                          />
+                          <Line 
+                            type="monotone" 
+                            dataKey="mean" 
+                            stroke="#10b981" 
+                            strokeWidth={1}
+                            strokeDasharray="5 5" 
+                            dot={false}
+                            name="Ortalama"
+                            isAnimationActive={false}
+                          />
+                          <Line 
+                            type="monotone" 
+                            dataKey="anomaly" 
+                            stroke="#ef4444" 
+                            strokeWidth={0}
+                            dot={{ r: 5, fill: '#ef4444' }}
+                            name="Anomali"
+                            isAnimationActive={false}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Controls & Status */}
+              <div className="space-y-6">
+                
+                {/* Status Card */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <AlertTriangle className="h-5 w-5" />
+                      Son Anomali
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {lastAnomaly && (
+                      <Alert variant="destructive">
+                        <AlertTriangle className="h-4 w-4" />
+                        <AlertTitle>Anomali Tespit Edildi!</AlertTitle>
+                        <AlertDescription>
+                          <div className="text-xs space-y-1 mt-2">
+                            <div><strong>Sensör:</strong> {lastAnomaly.sensor_type}</div>
+                            <div><strong>Değer:</strong> {lastAnomaly.current_value.toFixed(2)}</div>
+                            <div><strong>Z-Score:</strong> {lastAnomaly.z_score.toFixed(2)}</div>
+                            <div><strong>Zaman:</strong> {new Date(lastAnomaly.timestamp).toLocaleTimeString('tr-TR')}</div>
+                          </div>
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                    
+                    {!lastAnomaly && totalReadings === 0 && (
+                      <div className="text-sm text-slate-500 text-center py-4">
+                        Henüz veri alınmadı
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Sensör İstatistikleri */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Activity className="h-5 w-5" />
+                      Sensör İstatistikleri
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3 max-h-[300px] overflow-y-auto">
+                      {Object.entries(sensorStats).map(([sensor, stats]) => (
+                        <div key={sensor} className="border-b pb-2 last:border-b-0">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium">{sensor}</span>
+                            <Badge variant={stats.is_anomaly ? "destructive" : "secondary"} className="text-xs">
+                              {stats.is_anomaly ? "⚠️" : "✓"}
+                            </Badge>
+                          </div>
+                          <div className="text-xs text-slate-500 space-y-0.5">
+                            <div>Değer: {stats.current.toFixed(2)}</div>
+                            <div>Z-Score: {stats.z_score.toFixed(2)}</div>
+                            <div>Okuma: {stats.count}</div>
+                          </div>
+                        </div>
+                      ))}
+                      
+                      {Object.keys(sensorStats).length === 0 && (
+                        <div className="text-sm text-slate-400 text-center py-4">
+                          Sensör verisi bekleniyor...
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Sistem Kontrolleri */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Settings className="h-5 w-5" />
+                      Sistem Kontrolleri
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <Button 
+                      className="w-full" 
+                      variant="destructive"
+                      onClick={resetSystem}
+                      size="sm"
+                    >
+                      <RefreshCw className="mr-2 h-4 w-4" /> Sistemi Sıfırla
+                    </Button>
+                    
+                    <div className="text-xs text-slate-400 text-center pt-2">
+                      Terminal'den veri gönderin:<br/>
+                      <code className="bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded mt-1 inline-block">
+                        python send_sensor_data.py
+                      </code>
+                    </div>
+                  </CardContent>
+                </Card>
+
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Anomaly Logs Tab */}
+        {activeTab === 'anomaly-logs' && (
+          <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Activity className="h-5 w-5" />
-                Gerçek Zamanlı Sensör Verileri
-              </CardTitle>
-              <CardDescription>
-                {chartData.length > 0 ? `Son ${chartData.length} veri noktası` : 'Veri bekleniyor...'}
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5 text-red-500" />
+                    Anomali Logları
+                  </CardTitle>
+                  <CardDescription>
+                    Tespit edilen tüm anomalilerin detaylı kayıtları
+                  </CardDescription>
+                </div>
+                <Button onClick={fetchAnomalyHistory} variant="outline" size="sm">
+                  <RefreshCw className="mr-2 h-4 w-4" /> Yenile
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
-              {chartData.length === 0 ? (
-                <div className="h-[400px] w-full flex items-center justify-center text-slate-400">
-                  <div className="text-center">
-                    <Database className="h-12 w-12 mx-auto mb-2 opacity-50" />
-                    <p>Veri akışı bekleniyor...</p>
-                    <p className="text-sm mt-2">Terminal'den veri göndermeye başlayın</p>
-                  </div>
+              {anomalyHistory.length === 0 ? (
+                <div className="text-center py-12 text-slate-400">
+                  <AlertTriangle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <p>Henüz anomali kaydı bulunmuyor</p>
                 </div>
               ) : (
-                <div className="h-[400px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" className="stroke-slate-200 dark:stroke-slate-700" />
-                      <XAxis 
-                        dataKey="time" 
-                        tick={{ fontSize: 10 }}
-                        interval="preserveStartEnd"
-                      />
-                      <YAxis />
-                      <Tooltip 
-                        contentStyle={{ 
-                          backgroundColor: 'rgba(255, 255, 255, 0.95)', 
-                          borderRadius: '8px', 
-                          border: '1px solid #e2e8f0',
-                          boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' 
-                        }}
-                      />
-                      <Legend />
-                      <Line 
-                        type="monotone" 
-                        dataKey="value" 
-                        stroke="#2563eb" 
-                        strokeWidth={2} 
-                        dot={false}
-                        name="Değer"
-                        isAnimationActive={false}
-                      />
-                      <Line 
-                        type="monotone" 
-                        dataKey="mean" 
-                        stroke="#10b981" 
-                        strokeWidth={1}
-                        strokeDasharray="5 5" 
-                        dot={false}
-                        name="Ortalama"
-                        isAnimationActive={false}
-                      />
-                      <Line 
-                        type="monotone" 
-                        dataKey="anomaly" 
-                        stroke="#ef4444" 
-                        strokeWidth={0}
-                        dot={{ r: 5, fill: '#ef4444' }}
-                        name="Anomali"
-                        isAnimationActive={false}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="border-b bg-slate-50 dark:bg-slate-900">
+                      <tr>
+                        <th className="px-4 py-3 text-left font-medium">Zaman</th>
+                        <th className="px-4 py-3 text-left font-medium">Sensör Tipi</th>
+                        <th className="px-4 py-3 text-right font-medium">Değer</th>
+                        <th className="px-4 py-3 text-right font-medium">Z-Score</th>
+                        <th className="px-4 py-3 text-center font-medium">Seviye</th>
+                        <th className="px-4 py-3 text-left font-medium">Açıklama</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {anomalyHistory.map((anomaly, index) => (
+                        <tr key={index} className="hover:bg-slate-50 dark:hover:bg-slate-900">
+                          <td className="px-4 py-3 text-slate-600 dark:text-slate-300 font-mono text-xs">
+                            {formatTimestamp(anomaly.timestamp)}
+                          </td>
+                          <td className="px-4 py-3 font-medium">
+                            {anomaly.sensor_type}
+                          </td>
+                          <td className="px-4 py-3 text-right font-mono">
+                            {anomaly.current_value.toFixed(2)}
+                            {anomaly.unit && <span className="text-xs text-slate-500 ml-1">{anomaly.unit}</span>}
+                          </td>
+                          <td className="px-4 py-3 text-right font-mono font-bold text-red-600">
+                            {anomaly.z_score.toFixed(2)}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <Badge className={getSeverityColor(anomaly.severity)}>
+                              {anomaly.severity}
+                            </Badge>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-600 dark:text-slate-400">
+                            {anomaly.message}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </CardContent>
           </Card>
+        )}
 
-          {/* Controls & Status */}
-          <div className="space-y-6">
-            
-            {/* Status Card */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <AlertTriangle className="h-5 w-5" />
-                  Sistem Durumu
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {lastAnomaly && (
-                  <Alert variant="destructive">
-                    <AlertTriangle className="h-4 w-4" />
-                    <AlertTitle>Anomali Tespit Edildi!</AlertTitle>
-                    <AlertDescription>
-                      <div className="text-xs space-y-1 mt-2">
-                        <div><strong>Sensör:</strong> {lastAnomaly.sensor_type}</div>
-                        <div><strong>Değer:</strong> {lastAnomaly.current_value.toFixed(2)}</div>
-                        <div><strong>Z-Score:</strong> {lastAnomaly.z_score.toFixed(2)}</div>
-                        <div><strong>Zaman:</strong> {new Date(lastAnomaly.timestamp).toLocaleTimeString('tr-TR')}</div>
-                      </div>
-                    </AlertDescription>
-                  </Alert>
-                )}
-                
-                {!lastAnomaly && totalReadings === 0 && (
-                  <div className="text-sm text-slate-500 text-center py-4">
-                    Henüz veri alınmadı
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Sensör İstatistikleri */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Activity className="h-5 w-5" />
-                  Sensör İstatistikleri
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3 max-h-[300px] overflow-y-auto">
-                  {Object.entries(sensorStats).map(([sensor, stats]) => (
-                    <div key={sensor} className="border-b pb-2 last:border-b-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-medium">{sensor}</span>
-                        <Badge variant={stats.is_anomaly ? "destructive" : "secondary"} className="text-xs">
-                          {stats.is_anomaly ? "⚠️" : "✓"}
-                        </Badge>
-                      </div>
-                      <div className="text-xs text-slate-500 space-y-0.5">
-                        <div>Değer: {stats.current.toFixed(2)}</div>
-                        <div>Z-Score: {stats.z_score.toFixed(2)}</div>
-                        <div>Okuma: {stats.count}</div>
-                      </div>
-                    </div>
-                  ))}
-                  
-                  {Object.keys(sensorStats).length === 0 && (
-                    <div className="text-sm text-slate-400 text-center py-4">
-                      Sensör verisi bekleniyor...
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Sistem Kontrolleri */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Settings className="h-5 w-5" />
-                  Sistem Kontrolleri
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <Button 
-                  className="w-full" 
-                  variant="destructive"
-                  onClick={resetSystem}
-                  size="sm"
-                >
-                  <RefreshCw className="mr-2 h-4 w-4" /> Sistemi Sıfırla
-                </Button>
-                
-                <div className="text-xs text-slate-400 text-center pt-2">
-                  Terminal'den veri gönderin:<br/>
-                  <code className="bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded mt-1 inline-block">
-                    python send_sensor_data.py
-                  </code>
-                </div>
-              </CardContent>
-            </Card>
-
-          </div>
-        </div>
-        
-        {/* Anomali Geçmişi Tablosu */}
-        {anomalyHistory.length > 0 && (
+        {/* All Data Logs Tab */}
+        {activeTab === 'data-logs' && (
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-red-500" />
-                Anomali Geçmişi
-              </CardTitle>
-              <CardDescription>
-                Son {anomalyHistory.length} anomali kaydı
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Database className="h-5 w-5 text-blue-500" />
+                    Tüm Veri Logları
+                  </CardTitle>
+                  <CardDescription>
+                    Sisteme gelen tüm sensör verilerinin kayıtları (normal + anomali)
+                  </CardDescription>
+                </div>
+                <Button onClick={fetchAllDataLogs} variant="outline" size="sm">
+                  <RefreshCw className="mr-2 h-4 w-4" /> Yenile
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="border-b bg-slate-50 dark:bg-slate-900">
-                    <tr>
-                      <th className="px-4 py-2 text-left font-medium">Zaman</th>
-                      <th className="px-4 py-2 text-left font-medium">Sensör</th>
-                      <th className="px-4 py-2 text-right font-medium">Değer</th>
-                      <th className="px-4 py-2 text-right font-medium">Z-Score</th>
-                      <th className="px-4 py-2 text-center font-medium">Seviye</th>
-                      <th className="px-4 py-2 text-left font-medium">Açıklama</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {anomalyHistory.map((anomaly, index) => (
-                      <tr key={index} className="hover:bg-slate-50 dark:hover:bg-slate-900">
-                        <td className="px-4 py-2 text-slate-600 dark:text-slate-300 font-mono text-xs">
-                          {formatTimestamp(anomaly.timestamp)}
-                        </td>
-                        <td className="px-4 py-2 font-medium">
-                          {anomaly.sensor_type}
-                        </td>
-                        <td className="px-4 py-2 text-right font-mono">
-                          {anomaly.current_value.toFixed(2)}
-                          {anomaly.unit && <span className="text-xs text-slate-500 ml-1">{anomaly.unit}</span>}
-                        </td>
-                        <td className="px-4 py-2 text-right font-mono font-bold">
-                          {anomaly.z_score.toFixed(2)}
-                        </td>
-                        <td className="px-4 py-2 text-center">
-                          <Badge className={getSeverityColor(anomaly.severity)}>
-                            {anomaly.severity}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-2 text-xs text-slate-600 dark:text-slate-400">
-                          {anomaly.message}
-                        </td>
+              {allDataLogs.length === 0 ? (
+                <div className="text-center py-12 text-slate-400">
+                  <Database className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <p>Henüz veri kaydı bulunmuyor</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="border-b bg-slate-50 dark:bg-slate-900">
+                      <tr>
+                        <th className="px-4 py-3 text-left font-medium">Zaman</th>
+                        <th className="px-4 py-3 text-left font-medium">Sensör Tipi</th>
+                        <th className="px-4 py-3 text-right font-medium">Değer</th>
+                        <th className="px-4 py-3 text-right font-medium">Ortalama</th>
+                        <th className="px-4 py-3 text-right font-medium">Std Dev</th>
+                        <th className="px-4 py-3 text-right font-medium">Z-Score</th>
+                        <th className="px-4 py-3 text-center font-medium">Durum</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y">
+                      {allDataLogs.map((log, index) => (
+                        <tr 
+                          key={index} 
+                          className={`hover:bg-slate-50 dark:hover:bg-slate-900 ${
+                            log.is_anomaly ? 'bg-red-50 dark:bg-red-900/10' : ''
+                          }`}
+                        >
+                          <td className="px-4 py-3 text-slate-600 dark:text-slate-300 font-mono text-xs">
+                            {formatTimestamp(log.timestamp)}
+                          </td>
+                          <td className="px-4 py-3 font-medium">
+                            {log.sensor_type}
+                          </td>
+                          <td className="px-4 py-3 text-right font-mono font-bold">
+                            {log.current_value.toFixed(2)}
+                            {log.unit && <span className="text-xs text-slate-500 ml-1">{log.unit}</span>}
+                          </td>
+                          <td className="px-4 py-3 text-right font-mono text-slate-600">
+                            {log.mean.toFixed(2)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-mono text-slate-600">
+                            {log.std_dev.toFixed(2)}
+                          </td>
+                          <td className={`px-4 py-3 text-right font-mono font-bold ${
+                            log.is_anomaly ? 'text-red-600' : 'text-slate-600'
+                          }`}>
+                            {log.z_score.toFixed(2)}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            {log.is_anomaly ? (
+                              <Badge variant="destructive" className="text-xs">
+                                ⚠️ Anomali
+                              </Badge>
+                            ) : (
+                              <Badge variant="secondary" className="text-xs">
+                                ✓ Normal
+                              </Badge>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
