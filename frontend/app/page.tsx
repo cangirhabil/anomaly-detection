@@ -116,6 +116,7 @@ export default function Dashboard() {
     alert_message: "⚠️ ANOMALİ TESPİT EDİLDİ!"
   });
   const [configSaved, setConfigSaved] = useState(false);
+  const [configError, setConfigError] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -295,17 +296,30 @@ export default function Dashboard() {
 
   const updateConfig = async () => {
     try {
+      setConfigError(false);
+      console.log('Ayarlar kaydediliyor:', config);
+      
       const response = await fetch('http://localhost:8000/api/v1/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
       });
+      
       if (response.ok) {
+        const updatedConfig = await response.json();
+        console.log('Ayarlar başarıyla kaydedildi:', updatedConfig);
         setConfigSaved(true);
         setTimeout(() => setConfigSaved(false), 3000);
+      } else {
+        const errorData = await response.json();
+        console.error('Ayarlar kaydedilemedi:', errorData);
+        setConfigError(true);
+        setTimeout(() => setConfigError(false), 3000);
       }
     } catch (error) {
       console.error('Konfigürasyon güncelleme hatası:', error);
+      setConfigError(true);
+      setTimeout(() => setConfigError(false), 3000);
     }
   };
 
@@ -373,8 +387,6 @@ export default function Dashboard() {
                     : 'bg-red-500/10 text-red-400 border-red-500/30'
                 }`}
               >
-                {isConnected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
-                {isConnected ? "Bağlı" : "Bağlantı Kesildi"}
               </Badge>
             </div>
           </div>
@@ -1220,15 +1232,42 @@ export default function Dashboard() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="alert" className="text-slate-300">Alarm Mesajı</Label>
+                  <Label htmlFor="alert" className="text-slate-300 font-medium">Alarm Mesajı</Label>
                   <Input 
                     id="alert"
                     type="text" 
                     className="bg-slate-700 border-slate-600 text-white"
+                    placeholder="⚠️ ANOMALİ TESPİT EDİLDİ!"
                     value={config.alert_message} 
                     onChange={(e) => setConfig({...config, alert_message: e.target.value})}
                   />
+                  <p className="text-xs text-slate-500">
+                    Anomali tespit edildiğinde gösterilecek uyarı mesajı
+                  </p>
                 </div>
+
+                {configSaved && (
+                  <Alert className="bg-emerald-500/10 border-emerald-500/50">
+                    <AlertTitle className="text-emerald-400 flex items-center gap-2">
+                      ✅ Ayarlar Kaydedildi!
+                    </AlertTitle>
+                    <AlertDescription className="text-emerald-300">
+                      Tüm parametreler başarıyla güncellendi.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {configError && (
+                  <Alert className="bg-red-500/10 border-red-500/50">
+                    <AlertTriangle className="h-4 w-4 text-red-400" />
+                    <AlertTitle className="text-red-400">
+                      Ayarlar Kaydedilemedi!
+                    </AlertTitle>
+                    <AlertDescription className="text-red-300">
+                      Backend sunucusuna bağlanılamadı. Lütfen sunucunun çalıştığından emin olun.
+                    </AlertDescription>
+                  </Alert>
+                )}
 
                 <Button onClick={updateConfig} className="w-full bg-blue-600 hover:bg-blue-700">
                   <Settings className="mr-2 h-4 w-4" />

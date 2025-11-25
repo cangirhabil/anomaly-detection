@@ -114,6 +114,7 @@ def get_detector() -> AnomalyDetector:
                         z_score_threshold=anomaly_conf.get("z_score_threshold", 2.0),
                         min_data_points=anomaly_conf.get("min_data_points", 10),
                         min_training_size=anomaly_conf.get("min_training_size", 50),
+                        alert_message=anomaly_conf.get("alert_message", "⚠️ ANOMALİ TESPİT EDİLDİ!"),
                         sensors=anomaly_conf.get("sensors", {})
                     )
                     logger.info("Konfigürasyon config.yaml dosyasından yüklendi")
@@ -146,11 +147,11 @@ def get_detector() -> AnomalyDetector:
 
 class ConfigUpdateRequest(BaseModel):
     """Konfigürasyon güncelleme isteği"""
-    window_size: Optional[int] = Field(None, ge=1, le=1000)
+    window_size: Optional[int] = Field(None, ge=1, le=100000)
     z_score_threshold: Optional[float] = Field(None, gt=0, le=10)
-    min_data_points: Optional[int] = Field(None, ge=2, le=100)
-    min_training_size: Optional[int] = Field(None, ge=2, le=1000)
-    alert_message: Optional[str] = Field(None, min_length=1, max_length=100)
+    min_data_points: Optional[int] = Field(None, ge=2, le=50000)
+    min_training_size: Optional[int] = Field(None, ge=2, le=100000)
+    alert_message: Optional[str] = Field(None, min_length=1, max_length=200)
     
     class Config:
         schema_extra = {
