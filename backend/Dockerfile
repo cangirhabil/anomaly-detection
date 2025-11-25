@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Uygulama dosyalarını kopyala
 COPY anomaly_detector/ ./anomaly_detector/
 COPY app.py .
+COPY data_logger.py .
 COPY config.yaml .
 
 # Non-root user oluştur (güvenlik için)

@@ -31,6 +31,7 @@ import random
 
 from anomaly_detector import AnomalyDetector, AnomalyConfig
 from anomaly_detector.models import SensorReading, AnomalyResult
+from data_logger import DataLogger
 
 # Logging yapılandırması
 logging.basicConfig(
@@ -83,6 +84,16 @@ app.add_middleware(
 
 # Global dedektör instance (Singleton)
 _detector: Optional[AnomalyDetector] = None
+_data_logger: Optional[DataLogger] = None
+
+
+def get_logger() -> DataLogger:
+    """Global data logger instance'ını getir veya oluştur"""
+    global _data_logger
+    if _data_logger is None:
+        _data_logger = DataLogger(log_dir="logs", max_memory_logs=1000)
+        logger.info("Data logger başlatıldı")
+    return _data_logger
 
 
 def get_detector() -> AnomalyDetector:
@@ -245,15 +256,19 @@ async def analyze_sensor_data(reading: SensorReading):
     """
     try:
         detector = get_detector()
+        data_logger = get_logger()
         
         # Analiz et ve kaydet
         result = detector.add_reading(reading)
         
+        # Veriyi logla (hem normal hem anomali)
+        data_logger.log_reading(result.to_dict())
+        
         # Loglama
         if result.is_anomaly:
-            logger.warning(f"🚨 ANOMALİ: {result.message}")
+            logger.warning(f"🚨 ANOMALİ: {result.sensor_type}={result.current_value:.2f} | Z-Score={result.z_score:.2f} | {result.message}")
         else:
-            logger.info(f"Normal: {reading.sensor_type}={reading.value}")
+            logger.info(f"✅ Normal: {reading.sensor_type}={reading.value:.2f} | Z-Score={result.z_score:.2f}")
         
         # WebSocket üzerinden yayınla
         await manager.broadcast({
@@ -422,6 +437,74 @@ async def get_history():
         
     except Exception as e:
         logger.error(f"Geçmiş veri hatası: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@app.get("/api/v1/logs/recent", tags=["Logs"])
+async def get_recent_logs(limit: int = 100):
+    """
+    Son N kaydı getir
+    
+    Args:
+        limit: Getirilecek kayıt sayısı (varsayılan 100)
+    
+    Returns:
+        Son kayıtlar
+    """
+    try:
+        data_logger = get_logger()
+        logs = data_logger.get_recent_logs(limit=limit)
+        
+        return {
+            "count": len(logs),
+            "logs": logs,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Log getirme hatası: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@app.get("/api/v1/logs/anomalies", tags=["Logs"])
+async def get_anomaly_logs(limit: int = 100):
+    """
+    Son N anomaliyi getir
+    
+    Args:
+        limit: Getirilecek anomali sayısı (varsayılan 100)
+    
+    Returns:
+        Anomali logları
+    """
+    try:
+        data_logger = get_logger()
+        anomalies = data_logger.get_anomalies(limit=limit)
+        
+        return {
+            "count": len(anomalies),
+            "anomalies": anomalies,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Anomali log getirme hatası: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@app.get("/api/v1/logs/stats", tags=["Logs"])
+async def get_log_stats():
+    """
+    Log istatistiklerini getir
+    
+    Returns:
+        Log istatistikleri
+    """
+    try:
+        data_logger = get_logger()
+        stats = data_logger.get_stats()
+        
+        return stats
+    except Exception as e:
+        logger.error(f"Log istatistik hatası: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 

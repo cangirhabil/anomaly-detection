@@ -21,6 +21,19 @@ interface ReadingData {
   timestamp: string;
   severity: string;
   message: string;
+  sensor_id?: string;
+  unit?: string;
+}
+
+interface AnomalyLog {
+  timestamp: string;
+  sensor_type: string;
+  current_value: number;
+  z_score: number;
+  severity: string;
+  message: string;
+  sensor_id?: string;
+  unit?: string;
 }
 
 interface ChartDataPoint {
@@ -46,12 +59,19 @@ export default function Dashboard() {
   const [totalReadings, setTotalReadings] = useState(0);
   const [anomalyCount, setAnomalyCount] = useState(0);
   const [sensorStats, setSensorStats] = useState<SensorStats>({});
+  const [anomalyHistory, setAnomalyHistory] = useState<AnomalyLog[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     connectWebSocket();
+    fetchAnomalyHistory();
+    
+    // Her 10 saniyede bir anomali geçmişini güncelle
+    const interval = setInterval(fetchAnomalyHistory, 10000);
+    
     return () => {
+      clearInterval(interval);
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
@@ -85,6 +105,21 @@ export default function Dashboard() {
             if (reading.is_anomaly) {
               setAnomalyCount(prev => prev + 1);
               setLastAnomaly(reading);
+              
+              // Anomali geçmişine ekle
+              setAnomalyHistory(prev => {
+                const newHistory = [{
+                  timestamp: reading.timestamp,
+                  sensor_type: reading.sensor_type,
+                  current_value: reading.current_value,
+                  z_score: reading.z_score,
+                  severity: reading.severity,
+                  message: reading.message,
+                  sensor_id: reading.sensor_id,
+                  unit: reading.unit
+                }, ...prev];
+                return newHistory.slice(0, 50); // Son 50 anomali
+              });
             }
             
             // Sensör istatistiklerini güncelle
@@ -134,6 +169,20 @@ export default function Dashboard() {
     }
   };
 
+  const fetchAnomalyHistory = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/logs/anomalies?limit=50');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.anomalies && data.anomalies.length > 0) {
+          setAnomalyHistory(data.anomalies);
+        }
+      }
+    } catch (error) {
+      console.error('Anomali geçmişi getirme hatası:', error);
+    }
+  };
+
   const updateConfig = async () => {
     try {
       const response = await fetch('http://localhost:8000/api/v1/config', {
@@ -163,10 +212,29 @@ export default function Dashboard() {
         setAnomalyCount(0);
         setSensorStats({});
         setLastAnomaly(null);
+        setAnomalyHistory([]);
         alert('Sistem sıfırlandı!');
       }
     } catch (error) {
       console.error('Sistem sıfırlama hatası:', error);
+    }
+  };
+
+  const formatTimestamp = (timestamp: string) => {
+    return new Date(timestamp).toLocaleString('tr-TR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      day: '2-digit',
+      month: '2-digit'
+    });
+  };
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case 'critical': return 'text-red-700 bg-red-100 dark:bg-red-900 dark:text-red-200';
+      case 'warning': return 'text-orange-700 bg-orange-100 dark:bg-orange-900 dark:text-orange-200';
+      default: return 'text-yellow-700 bg-yellow-100 dark:bg-yellow-900 dark:text-yellow-200';
     }
   };
 
@@ -398,6 +466,65 @@ export default function Dashboard() {
 
           </div>
         </div>
+        
+        {/* Anomali Geçmişi Tablosu */}
+        {anomalyHistory.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-red-500" />
+                Anomali Geçmişi
+              </CardTitle>
+              <CardDescription>
+                Son {anomalyHistory.length} anomali kaydı
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b bg-slate-50 dark:bg-slate-900">
+                    <tr>
+                      <th className="px-4 py-2 text-left font-medium">Zaman</th>
+                      <th className="px-4 py-2 text-left font-medium">Sensör</th>
+                      <th className="px-4 py-2 text-right font-medium">Değer</th>
+                      <th className="px-4 py-2 text-right font-medium">Z-Score</th>
+                      <th className="px-4 py-2 text-center font-medium">Seviye</th>
+                      <th className="px-4 py-2 text-left font-medium">Açıklama</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {anomalyHistory.map((anomaly, index) => (
+                      <tr key={index} className="hover:bg-slate-50 dark:hover:bg-slate-900">
+                        <td className="px-4 py-2 text-slate-600 dark:text-slate-300 font-mono text-xs">
+                          {formatTimestamp(anomaly.timestamp)}
+                        </td>
+                        <td className="px-4 py-2 font-medium">
+                          {anomaly.sensor_type}
+                        </td>
+                        <td className="px-4 py-2 text-right font-mono">
+                          {anomaly.current_value.toFixed(2)}
+                          {anomaly.unit && <span className="text-xs text-slate-500 ml-1">{anomaly.unit}</span>}
+                        </td>
+                        <td className="px-4 py-2 text-right font-mono font-bold">
+                          {anomaly.z_score.toFixed(2)}
+                        </td>
+                        <td className="px-4 py-2 text-center">
+                          <Badge className={getSeverityColor(anomaly.severity)}>
+                            {anomaly.severity}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-2 text-xs text-slate-600 dark:text-slate-400">
+                          {anomaly.message}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        
       </div>
     </div>
   );
