@@ -1,61 +1,47 @@
-# Anomali Tespit Servisi Konfigürasyonu
-
-# Servis Ayarları
-service:
-  name: "anomaly-detector"
-  version: "1.0.0"
-  port: 8000
-  host: "0.0.0.0"
-
-# Anomali Tespit Parametreleri
 anomaly:
-  window_size: 1000              # Veri pencere boyutu (örn: son 1000 okuma)
-  z_score_threshold: 2.0         # Varsayılan Z-Score eşik değeri
-  min_data_points: 10            # İstatistik hesaplamak için minimum veri
-  min_training_size: 50          # Alarm üretmek için minimum veri (Eğitim süresi)
-  
-  # Sensör Bazlı Ayarlar (Override)
+  alert_message: "\u26A0\uFE0F ANOMAL\u0130 TESP\u0130T ED\u0130LD\u0130!"
+  min_data_points: 30
+  min_training_size: 50
   sensors:
-    motor_current:
-      threshold: 2.5
-      min_training_size: 100
-    system_voltage:
-      threshold: 3.0
-      min_training_size: 50
     acoustic_noise:
+      min_training_size: 200
       threshold: 2.2
-      min_training_size: 200
-    vibration_level:
-      threshold: 2.0
-      min_training_size: 200
-    throughput:
+    motor_current:
+      min_training_size: 100
+      threshold: 2.5
+    system_voltage:
+      min_training_size: 50
       threshold: 3.0
+    throughput:
       min_training_size: 500
-
-# Logging Ayarları
-logging:
-  level: "INFO"                # DEBUG, INFO, WARNING, ERROR
-  format: "json"               # json veya text
-  file: "logs/anomaly-detector.log"
-
-# CORS Ayarları
+      threshold: 3.0
+    vibration_level:
+      min_training_size: 200
+      threshold: 2.0
+  window_size: 200
+  z_score_threshold: 3.0
 cors:
-  enabled: true
-  allow_origins:
-    - "http://localhost:3000"
-    - "http://localhost:8080"
   allow_methods:
-    - "GET"
-    - "POST"
-    - "PUT"
-    - "DELETE"
-
-# Rate Limiting (opsiyonel)
-rate_limit:
-  enabled: false
-  requests_per_minute: 100
-
-# Monitoring (opsiyonel)
+  - GET
+  - POST
+  - PUT
+  - DELETE
+  allow_origins:
+  - http://localhost:3000
+  - http://localhost:8080
+  enabled: true
+logging:
+  file: logs/anomaly-detector.log
+  format: json
+  level: INFO
 monitoring:
   enabled: false
   prometheus_port: 9090
+rate_limit:
+  enabled: false
+  requests_per_minute: 100
+service:
+  host: 0.0.0.0
+  name: anomaly-detector
+  port: 8000
+  version: 1.0.0

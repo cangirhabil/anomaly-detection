@@ -67,6 +67,14 @@ interface SensorStats {
   };
 }
 
+interface Config {
+  window_size: number;
+  z_score_threshold: number;
+  min_data_points: number;
+  min_training_size: number;
+  alert_message: string;
+}
+
 export default function Dashboard() {
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -78,7 +86,14 @@ export default function Dashboard() {
   const [selectedSensor, setSelectedSensor] = useState<string | null>(null);
   const [anomalyHistory, setAnomalyHistory] = useState<AnomalyLog[]>([]);
   const [allDataLogs, setAllDataLogs] = useState<DataLog[]>([]);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'anomaly-logs' | 'data-logs'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'anomaly-logs' | 'data-logs' | 'settings'>('dashboard');
+  const [config, setConfig] = useState<Config>({
+    window_size: 100,
+    z_score_threshold: 3.0,
+    min_data_points: 10,
+    min_training_size: 20,
+    alert_message: "⚠️ ANOMALİ TESPİT EDİLDİ!"
+  });
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -86,6 +101,7 @@ export default function Dashboard() {
     connectWebSocket();
     fetchAnomalyHistory();
     fetchAllDataLogs();
+    fetchConfig();
     
     // Her 10 saniyede bir logları güncelle
     const interval = setInterval(() => {
@@ -249,15 +265,24 @@ export default function Dashboard() {
     }
   };
 
+  const fetchConfig = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/config');
+      if (response.ok) {
+        const data = await response.json();
+        setConfig(data);
+      }
+    } catch (error) {
+      console.error('Konfigürasyon getirme hatası:', error);
+    }
+  };
+
   const updateConfig = async () => {
     try {
       const response = await fetch('http://localhost:8000/api/v1/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          z_score_threshold: 3.0,
-          window_size: 100
-        }),
+        body: JSON.stringify(config),
       });
       if (response.ok) {
         alert('Konfigürasyon güncellendi!');
@@ -350,6 +375,14 @@ export default function Dashboard() {
           >
             <Database className="mr-2 h-4 w-4" />
             Tüm Veri Logları ({allDataLogs.length})
+          </Button>
+          <Button
+            variant={activeTab === 'settings' ? 'default' : 'ghost'}
+            onClick={() => setActiveTab('settings')}
+            className="rounded-b-none"
+          >
+            <Settings className="mr-2 h-4 w-4" />
+            Ayarlar
           </Button>
         </div>
 
@@ -793,6 +826,183 @@ export default function Dashboard() {
               )}
             </CardContent>
           </Card>
+        )}
+
+        {/* Settings Tab */}
+        {activeTab === 'settings' && (
+          <div className="grid gap-8 md:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Settings className="h-5 w-5" />
+                  Sistem Ayarları
+                </CardTitle>
+                <CardDescription>
+                  Makine operatörleri için basitleştirilmiş anomali tespit ayarları.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                
+                <div className="space-y-2">
+                  <Label htmlFor="z_score_threshold" className="text-base font-semibold">Hassasiyet Seviyesi</Label>
+                  <div className="flex items-center gap-4">
+                    <Input 
+                      id="z_score_threshold" 
+                      type="number" 
+                      step="0.1"
+                      className="w-24"
+                      value={config.z_score_threshold} 
+                      onChange={(e) => setConfig({...config, z_score_threshold: parseFloat(e.target.value)})}
+                    />
+                    <span className="text-sm text-slate-500">
+                      (Önerilen: 2.0 - 3.0 arası)
+                    </span>
+                  </div>
+                  <p className="text-sm text-slate-500 bg-slate-100 dark:bg-slate-900 p-3 rounded-md">
+                    Bu değer düştükçe sistem en ufak değişimlere bile alarm verir (Hassas). 
+                    Değer yükseldikçe sadece çok büyük hatalarda alarm verir (Kaba).
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="window_size" className="text-base font-semibold">Analiz Penceresi (Son Veriler)</Label>
+                  <Input 
+                    id="window_size" 
+                    type="number" 
+                    value={config.window_size} 
+                    onChange={(e) => setConfig({...config, window_size: parseInt(e.target.value)})}
+                  />
+                  <p className="text-sm text-slate-500">
+                    Sistemin "Normal" kabul ettiği durumu belirlemek için geriye dönük kaç adet veriye bakacağını belirler.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="min_training_size">Öğrenme Süresi</Label>
+                    <Input 
+                      id="min_training_size" 
+                      type="number" 
+                      value={config.min_training_size} 
+                      onChange={(e) => setConfig({...config, min_training_size: parseInt(e.target.value)})}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="min_data_points">Min. Veri</Label>
+                    <Input 
+                      id="min_data_points" 
+                      type="number" 
+                      value={config.min_data_points} 
+                      onChange={(e) => setConfig({...config, min_data_points: parseInt(e.target.value)})}
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-slate-400">
+                  *Öğrenme süresi ve min. veri, sistemin ilk açılışta ne kadar süre veri toplayıp analiz yapmaya başlayacağını belirler.
+                </p>
+
+                <div className="space-y-2">
+                  <Label htmlFor="alert_message">Alarm Mesajı</Label>
+                  <Input 
+                    id="alert_message" 
+                    type="text" 
+                    value={config.alert_message} 
+                    onChange={(e) => setConfig({...config, alert_message: e.target.value})}
+                  />
+                </div>
+
+                <Button onClick={updateConfig} className="w-full mt-4 bg-blue-600 hover:bg-blue-700">
+                  <Settings className="mr-2 h-4 w-4" /> Ayarları Kaydet ve Uygula
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Otomatik Modlar</CardTitle>
+                <CardDescription>
+                  Tek tıkla makine çalışma prensibine uygun ayarları yükleyin.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-4">
+                  <Button 
+                    variant="outline" 
+                    className={`justify-start h-auto py-4 px-4 border-2 ${config.z_score_threshold < 2.0 ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-transparent'}`}
+                    onClick={() => setConfig({
+                      ...config,
+                      z_score_threshold: 1.8,
+                      window_size: 50,
+                      min_data_points: 10,
+                      min_training_size: 20
+                    })}
+                  >
+                    <div className="text-left w-full">
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-lg">Hassas Mod</span>
+                        <Badge variant="secondary">Yüksek Dikkat</Badge>
+                      </div>
+                      <div className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                        En ufak titreşim veya basınç değişimini yakalar. Kalite kontrolün çok sıkı olduğu durumlar için.
+                      </div>
+                    </div>
+                  </Button>
+
+                  <Button 
+                    variant="outline" 
+                    className={`justify-start h-auto py-4 px-4 border-2 ${config.z_score_threshold >= 2.0 && config.z_score_threshold <= 3.0 ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-transparent'}`}
+                    onClick={() => setConfig({
+                      ...config,
+                      z_score_threshold: 2.5,
+                      window_size: 100,
+                      min_data_points: 20,
+                      min_training_size: 50
+                    })}
+                  >
+                    <div className="text-left w-full">
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-lg">Dengeli Mod</span>
+                        <Badge className="bg-green-600">Önerilen</Badge>
+                      </div>
+                      <div className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                        Standart üretim hattı. Yanlış alarmları minimize ederken gerçek hataları kaçırmaz.
+                      </div>
+                    </div>
+                  </Button>
+
+                  <Button 
+                    variant="outline" 
+                    className={`justify-start h-auto py-4 px-4 border-2 ${config.z_score_threshold > 3.0 ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20' : 'border-transparent'}`}
+                    onClick={() => setConfig({
+                      ...config,
+                      z_score_threshold: 3.5,
+                      window_size: 200,
+                      min_data_points: 50,
+                      min_training_size: 100
+                    })}
+                  >
+                    <div className="text-left w-full">
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-lg">Esnek Mod</span>
+                        <Badge variant="outline">Düşük Hassasiyet</Badge>
+                      </div>
+                      <div className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                        Sadece makine durmasına sebep olabilecek çok büyük arızalarda alarm verir.
+                      </div>
+                    </div>
+                  </Button>
+                </div>
+                
+                <Alert className="mt-6 bg-slate-100 dark:bg-slate-900 border-none">
+                  <AlertTitle className="text-xs font-bold uppercase text-slate-500">Bilgi</AlertTitle>
+                  <AlertDescription className="text-xs text-slate-500 mt-1">
+                    Seçtiğiniz mod, yukarıdaki ayarları otomatik olarak doldurur. İsterseniz değerleri manuel olarak değiştirebilirsiniz.
+                    Değişikliklerin aktif olması için "Ayarları Kaydet" butonuna basmayı unutmayın.
+                  </AlertDescription>
+                </Alert>
+              </CardContent>
+            </Card>
+          </div>
         )}
         
       </div>

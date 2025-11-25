@@ -149,13 +149,17 @@ class ConfigUpdateRequest(BaseModel):
     window_size: Optional[int] = Field(None, ge=1, le=1000)
     z_score_threshold: Optional[float] = Field(None, gt=0, le=10)
     min_data_points: Optional[int] = Field(None, ge=2, le=100)
+    min_training_size: Optional[int] = Field(None, ge=2, le=1000)
+    alert_message: Optional[str] = Field(None, min_length=1, max_length=100)
     
     class Config:
         schema_extra = {
             "example": {
                 "window_size": 100,
                 "z_score_threshold": 3.0,
-                "min_data_points": 10
+                "min_data_points": 10,
+                "min_training_size": 20,
+                "alert_message": "⚠️ ANOMALİ TESPİT EDİLDİ!"
             }
         }
 
@@ -344,6 +348,10 @@ async def update_config(request: ConfigUpdateRequest):
             current_config["z_score_threshold"] = request.z_score_threshold
         if request.min_data_points is not None:
             current_config["min_data_points"] = request.min_data_points
+        if request.min_training_size is not None:
+            current_config["min_training_size"] = request.min_training_size
+        if request.alert_message is not None:
+            current_config["alert_message"] = request.alert_message
         
         # Yeni dedektör oluştur
         new_config = AnomalyConfig(**current_config)
@@ -373,6 +381,10 @@ async def update_config(request: ConfigUpdateRequest):
                     yaml_config["anomaly"]["z_score_threshold"] = request.z_score_threshold
                 if request.min_data_points is not None:
                     yaml_config["anomaly"]["min_data_points"] = request.min_data_points
+                if request.min_training_size is not None:
+                    yaml_config["anomaly"]["min_training_size"] = request.min_training_size
+                if request.alert_message is not None:
+                    yaml_config["anomaly"]["alert_message"] = request.alert_message
                 
                 with open("config.yaml", "w") as f:
                     yaml.dump(yaml_config, f, default_flow_style=False)
