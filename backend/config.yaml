@@ -1,7 +1,7 @@
 anomaly:
   alert_message: "\u26A0\uFE0F ANOMAL\u0130 TESP\u0130T ED\u0130LD\u0130!"
-  min_data_points: 50
-  min_training_size: 100
+  min_data_points: 20
+  min_training_size: 50
   sensors:
     acoustic_noise:
       min_training_size: 200
@@ -18,12 +18,12 @@ anomaly:
     vibration_level:
       min_training_size: 200
       threshold: 2.0
-  window_size: 500
+  window_size: 50
   z_score_threshold: 2.5
 auto_reporting:
   anomaly_window_minutes: 5
-  cooldown_minutes: 15
-  critical_cooldown_minutes: 5
+  cooldown_minutes: 3
+  critical_cooldown_minutes: 2
   enabled: true
   instant_report_on_critical: true
   instant_report_on_high: false
@@ -64,7 +64,7 @@ llm:
   enabled: true
   max_tokens: 4096
   min_anomalies_for_analysis: 1
-  model: gemini-2.5-flash-preview-05-20
+  model: gemini-2.5-flash
   provider: gemini
   report_cooldown: 300
   temperature: 0.7

@@ -1126,6 +1126,24 @@ async def toggle_auto_report(enabled: bool):
     auto_reporter = get_auto_reporter()
     auto_reporter.config.enabled = enabled
     
+    # Config dosyasına kaydet
+    try:
+        config_path = "config.yaml"
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                yaml_config = yaml.safe_load(f) or {}
+            
+            if "auto_reporting" not in yaml_config:
+                yaml_config["auto_reporting"] = {}
+            yaml_config["auto_reporting"]["enabled"] = enabled
+            
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.dump(yaml_config, f, default_flow_style=False, allow_unicode=True, sort_keys=True)
+            
+            logger.info(f"Config dosyasına kaydedildi: auto_reporting.enabled={enabled}")
+    except Exception as e:
+        logger.error(f"Config kaydetme hatası: {e}")
+    
     return {
         "success": True,
         "message": f"Otomatik raporlama {'aktif' if enabled else 'devre dışı'}",

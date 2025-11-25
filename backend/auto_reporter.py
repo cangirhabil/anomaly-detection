@@ -272,10 +272,11 @@ class AutoReporter:
         Mevcut anomali durumunu değerlendir ve karar ver
         
         Profesyonel karar mekanizması:
-        1. Kritik anomali kontrolü (anında tetikleme)
-        2. Çoklu sensör kontrolü (korelasyon)
-        3. Birikimli skor kontrolü
-        4. Zaman penceresi değerlendirmesi
+        1. Minimum anomali sayısı kontrolü (tüm kararlar için geçerli)
+        2. Kritik anomali kontrolü (anında tetikleme)
+        3. Çoklu sensör kontrolü (korelasyon)
+        4. Birikimli skor kontrolü
+        5. Zaman penceresi değerlendirmesi
         """
         now = datetime.now()
         window_start = now - timedelta(minutes=self.config.anomaly_window_minutes)
@@ -291,6 +292,12 @@ class AutoReporter:
         
         # İstatistikleri hesapla
         total_count = len(recent_anomalies)
+        
+        # ===== ÖN KONTROL: MİNİMUM ANOMALİ SAYISI =====
+        # Tüm kararlar için minimum anomali sayısı gerekli
+        if total_count < self.config.min_anomalies_for_report:
+            logger.debug(f"Yeterli anomali yok: {total_count}/{self.config.min_anomalies_for_report}")
+            return None
         
         # Z-Score analizi
         z_scores = [abs(a.get("z_score", 0)) for a in recent_anomalies]
