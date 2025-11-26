@@ -173,20 +173,63 @@ interface LLMStatus {
 
 interface AutoReportConfig {
   enabled: boolean;
-  min_anomalies_for_report: number;
   anomaly_window_minutes: number;
-  instant_report_on_critical: boolean;
-  cooldown_minutes: number;
-  critical_cooldown_minutes: number;
   multi_sensor_threshold: number;
+  leaky_bucket?: {
+    critical_points: number;
+    high_points: number;
+    medium_points: number;
+    low_points: number;
+    decay_rate: number;
+    decay_interval_seconds: number;
+    max_bucket_capacity: number;
+  };
+  adaptive_threshold?: {
+    base_warning_threshold: number;
+    base_critical_threshold: number;
+    adaptation_window_minutes: number;
+    min_samples_for_adaptation: number;
+    min_threshold_multiplier: number;
+    max_threshold_multiplier: number;
+    hysteresis_margin: number;
+  };
+  state_transition?: {
+    report_on_warning_entry: boolean;
+    report_on_critical_entry: boolean;
+    report_on_critical_exit: boolean;
+    report_on_normal_return: boolean;
+    normal_cooldown_minutes: number;
+    warning_cooldown_minutes: number;
+    critical_cooldown_minutes: number;
+    state_confirmation_seconds: number;
+  };
+}
+
+interface SystemStatus {
+  state: string;
+  state_turkish: string;
+  state_color: string;
+  bucket_score: number;
+  warning_threshold: number;
+  critical_threshold: number;
+  fill_percentage: number;
+  decay_rate: number;
+  enabled: boolean;
 }
 
 interface AutoReportStats {
   total_anomalies_processed: number;
   reports_sent: number;
   reports_skipped_cooldown: number;
+  state_transitions: number;
   last_report_sent: string | null;
+  last_state_change: string | null;
   buffer_size: number;
+  current_state: string;
+  current_state_turkish: string;
+  bucket_score: number;
+  warning_threshold: number;
+  critical_threshold: number;
   config: AutoReportConfig;
 }
 
@@ -258,15 +301,13 @@ export default function Dashboard() {
   });
   const [autoReportConfig, setAutoReportConfig] = useState<AutoReportConfig>({
     enabled: true,
-    min_anomalies_for_report: 3,
-    anomaly_window_minutes: 5,
-    instant_report_on_critical: true,
-    cooldown_minutes: 15,
-    critical_cooldown_minutes: 5,
-    multi_sensor_threshold: 2,
+    anomaly_window_minutes: 10,
+    multi_sensor_threshold: 3,
   });
   const [autoReportStats, setAutoReportStats] =
     useState<AutoReportStats | null>(null);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [systemState, setSystemState] = useState<string>("NORMAL");
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState<{
     type: "success" | "error";
@@ -498,6 +539,7 @@ export default function Dashboard() {
 
   const fetchAutoReportStatus = async () => {
     try {
+      // Detaylı istatistikleri al
       const response = await fetch(
         "http://localhost:8000/api/v1/auto-report/status"
       );
@@ -507,6 +549,15 @@ export default function Dashboard() {
         if (data.config) {
           setAutoReportConfig(data.config);
         }
+      }
+      
+      // Sistem durumu özeti al
+      const statusResponse = await fetch(
+        "http://localhost:8000/api/v1/auto-report/system-status"
+      );
+      if (statusResponse.ok) {
+        const statusData = await statusResponse.json();
+        setSystemStatus(statusData);
       }
     } catch (error) {
       console.error("Otomatik rapor durumu getirme hatası:", error);
@@ -758,7 +809,14 @@ export default function Dashboard() {
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(autoReportConfig),
+          body: JSON.stringify({
+            enabled: autoReportConfig.enabled,
+            anomaly_window_minutes: autoReportConfig.anomaly_window_minutes,
+            multi_sensor_threshold: autoReportConfig.multi_sensor_threshold,
+            leaky_bucket: autoReportConfig.leaky_bucket,
+            adaptive_threshold: autoReportConfig.adaptive_threshold,
+            state_transition: autoReportConfig.state_transition,
+          }),
         }
       );
       if (response.ok) {
@@ -767,6 +825,12 @@ export default function Dashboard() {
           text: "Otomatik raporlama ayarları kaydedildi!",
         });
         fetchAutoReportStatus();
+      } else {
+        const errorData = await response.json();
+        setSettingsMessage({
+          type: "error",
+          text: errorData.detail || "Ayarlar kaydedilemedi",
+        });
       }
     } catch (error) {
       console.error("Auto report config hatası:", error);
@@ -775,6 +839,33 @@ export default function Dashboard() {
       setSettingsSaving(false);
       setTimeout(() => setSettingsMessage(null), 3000);
     }
+  };
+
+  // State Reset Fonksiyonu
+  const resetAutoReportState = async () => {
+    try {
+      const response = await fetch(
+        "http://localhost:8000/api/v1/auto-report/reset-state",
+        { method: "POST" }
+      );
+      if (response.ok) {
+        setSettingsMessage({
+          type: "success",
+          text: "Sistem durumu NORMAL'e sıfırlandı!",
+        });
+        setSystemState("NORMAL");
+        fetchAutoReportStatus();
+      } else {
+        setSettingsMessage({
+          type: "error",
+          text: "Durum sıfırlanamadı",
+        });
+      }
+    } catch (error) {
+      console.error("State reset hatası:", error);
+      setSettingsMessage({ type: "error", text: "Bağlantı hatası" });
+    }
+    setTimeout(() => setSettingsMessage(null), 3000);
   };
 
   const toggleAutoReport = async () => {
@@ -2587,7 +2678,7 @@ export default function Dashboard() {
               </Card>
             </div>
 
-            {/* Auto Report Settings */}
+            {/* Auto Report Settings - State-Based & Adaptive Threshold */}
             <Card className="border-slate-700/50 bg-slate-800/50 backdrop-blur">
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -2595,10 +2686,12 @@ export default function Dashboard() {
                     <CardTitle className="text-white flex items-center gap-2">
                       <Zap className="h-5 w-5 text-amber-400" />
                       Otomatik Raporlama Ayarları
+                      <Badge className="bg-blue-500/20 text-blue-300 border-blue-500/30 text-xs">
+                        State-Based v2.0
+                      </Badge>
                     </CardTitle>
                     <CardDescription className="text-slate-400">
-                      Sistem anomali tespit ettiğinde otomatik rapor oluşturma
-                      ve e-posta gönderme
+                      Durum bazlı otomatik rapor sistemi - Leaky Bucket & Adaptive Threshold
                     </CardDescription>
                   </div>
                   <Button
@@ -2614,9 +2707,92 @@ export default function Dashboard() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-6">
+                {/* System Status Card */}
+                {systemStatus && (
+                  <div className={`rounded-lg border-2 p-4 ${
+                    systemStatus.state === "CRITICAL" 
+                      ? "border-red-500 bg-red-500/10" 
+                      : systemStatus.state === "WARNING"
+                      ? "border-yellow-500 bg-yellow-500/10"
+                      : "border-emerald-500 bg-emerald-500/10"
+                  }`}>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-4 h-4 rounded-full animate-pulse ${
+                          systemStatus.state === "CRITICAL" 
+                            ? "bg-red-500" 
+                            : systemStatus.state === "WARNING"
+                            ? "bg-yellow-500"
+                            : "bg-emerald-500"
+                        }`}></div>
+                        <div>
+                          <p className="text-sm text-slate-400">Sistem Durumu</p>
+                          <p className={`text-2xl font-bold ${
+                            systemStatus.state === "CRITICAL" 
+                              ? "text-red-400" 
+                              : systemStatus.state === "WARNING"
+                              ? "text-yellow-400"
+                              : "text-emerald-400"
+                          }`}>
+                            {systemStatus.state_turkish}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm text-slate-400">Bucket Skoru</p>
+                        <p className="text-3xl font-bold text-white">
+                          {systemStatus.bucket_score.toFixed(1)}
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {/* Progress Bar */}
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-xs text-slate-400">
+                        <span>0</span>
+                        <span className="text-yellow-400">Warning: {systemStatus.warning_threshold}</span>
+                        <span className="text-red-400">Critical: {systemStatus.critical_threshold}</span>
+                        <span>100</span>
+                      </div>
+                      <div className="relative h-4 bg-slate-700 rounded-full overflow-hidden">
+                        {/* Warning zone */}
+                        <div 
+                          className="absolute h-full bg-yellow-500/30"
+                          style={{ 
+                            left: `${systemStatus.warning_threshold}%`, 
+                            width: `${systemStatus.critical_threshold - systemStatus.warning_threshold}%` 
+                          }}
+                        ></div>
+                        {/* Critical zone */}
+                        <div 
+                          className="absolute h-full bg-red-500/30"
+                          style={{ 
+                            left: `${systemStatus.critical_threshold}%`, 
+                            width: `${100 - systemStatus.critical_threshold}%` 
+                          }}
+                        ></div>
+                        {/* Current score */}
+                        <div 
+                          className={`h-full transition-all duration-500 ${
+                            systemStatus.state === "CRITICAL" 
+                              ? "bg-red-500" 
+                              : systemStatus.state === "WARNING"
+                              ? "bg-yellow-500"
+                              : "bg-emerald-500"
+                          }`}
+                          style={{ width: `${Math.min(systemStatus.fill_percentage, 100)}%` }}
+                        ></div>
+                      </div>
+                      <p className="text-xs text-slate-500 text-center">
+                        Decay Rate: -{systemStatus.decay_rate} puan/dakika
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Stats Row */}
                 {autoReportStats && (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                     <div className="bg-slate-700/50 rounded-lg p-3 text-center">
                       <p className="text-xs text-slate-400">İşlenen Anomali</p>
                       <p className="text-xl font-bold text-white">
@@ -2630,6 +2806,12 @@ export default function Dashboard() {
                       </p>
                     </div>
                     <div className="bg-slate-700/50 rounded-lg p-3 text-center">
+                      <p className="text-xs text-slate-400">State Geçişi</p>
+                      <p className="text-xl font-bold text-blue-400">
+                        {autoReportStats.state_transitions || 0}
+                      </p>
+                    </div>
+                    <div className="bg-slate-700/50 rounded-lg p-3 text-center">
                       <p className="text-xs text-slate-400">Cooldown Atlanan</p>
                       <p className="text-xl font-bold text-amber-400">
                         {autoReportStats.reports_skipped_cooldown}
@@ -2637,102 +2819,392 @@ export default function Dashboard() {
                     </div>
                     <div className="bg-slate-700/50 rounded-lg p-3 text-center">
                       <p className="text-xs text-slate-400">Tampon Boyutu</p>
-                      <p className="text-xl font-bold text-blue-400">
+                      <p className="text-xl font-bold text-purple-400">
                         {autoReportStats.buffer_size}
                       </p>
                     </div>
                   </div>
                 )}
 
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  <div className="space-y-2">
-                    <Label className="text-slate-300">
-                      Min. Anomali Sayısı
-                    </Label>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={50}
-                      value={autoReportConfig.min_anomalies_for_report}
-                      onChange={(e) =>
-                        setAutoReportConfig({
-                          ...autoReportConfig,
-                          min_anomalies_for_report:
-                            parseInt(e.target.value) || 3,
-                        })
-                      }
-                      className="bg-slate-700 border-slate-600 text-white"
-                    />
-                    <p className="text-xs text-slate-500">
-                      Rapor için gerekli minimum anomali
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-slate-300">
-                      Değerlendirme Penceresi (dk)
-                    </Label>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={60}
-                      value={autoReportConfig.anomaly_window_minutes}
-                      onChange={(e) =>
-                        setAutoReportConfig({
-                          ...autoReportConfig,
-                          anomaly_window_minutes: parseInt(e.target.value) || 5,
-                        })
-                      }
-                      className="bg-slate-700 border-slate-600 text-white"
-                    />
-                    <p className="text-xs text-slate-500">
-                      Bu süredeki anomaliler değerlendirilir
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-slate-300">
-                      Normal Cooldown (dk)
-                    </Label>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={120}
-                      value={autoReportConfig.cooldown_minutes}
-                      onChange={(e) =>
-                        setAutoReportConfig({
-                          ...autoReportConfig,
-                          cooldown_minutes: parseInt(e.target.value) || 15,
-                        })
-                      }
-                      className="bg-slate-700 border-slate-600 text-white"
-                    />
-                    <p className="text-xs text-slate-500">
-                      Aynı seviye için bekleme süresi
-                    </p>
+                {/* Leaky Bucket Settings */}
+                <div className="space-y-3">
+                  <h4 className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                    🪣 Leaky Bucket Ayarları
+                  </h4>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="space-y-2">
+                      <Label className="text-slate-400 text-xs">Decay Rate (puan/dk)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={20}
+                        step={0.5}
+                        value={autoReportConfig.leaky_bucket?.decay_rate || 5}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            leaky_bucket: {
+                              ...autoReportConfig.leaky_bucket,
+                              decay_rate: parseFloat(e.target.value) || 5,
+                              critical_points: autoReportConfig.leaky_bucket?.critical_points || 15,
+                              high_points: autoReportConfig.leaky_bucket?.high_points || 8,
+                              medium_points: autoReportConfig.leaky_bucket?.medium_points || 3,
+                              low_points: autoReportConfig.leaky_bucket?.low_points || 1,
+                              decay_interval_seconds: autoReportConfig.leaky_bucket?.decay_interval_seconds || 10,
+                              max_bucket_capacity: autoReportConfig.leaky_bucket?.max_bucket_capacity || 100,
+                            },
+                          })
+                        }
+                        className="bg-slate-700 border-slate-600 text-white h-8 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-slate-400 text-xs">Critical Puan</Label>
+                      <Input
+                        type="number"
+                        min={5}
+                        max={30}
+                        value={autoReportConfig.leaky_bucket?.critical_points || 15}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            leaky_bucket: {
+                              ...autoReportConfig.leaky_bucket,
+                              critical_points: parseFloat(e.target.value) || 15,
+                              decay_rate: autoReportConfig.leaky_bucket?.decay_rate || 5,
+                              high_points: autoReportConfig.leaky_bucket?.high_points || 8,
+                              medium_points: autoReportConfig.leaky_bucket?.medium_points || 3,
+                              low_points: autoReportConfig.leaky_bucket?.low_points || 1,
+                              decay_interval_seconds: autoReportConfig.leaky_bucket?.decay_interval_seconds || 10,
+                              max_bucket_capacity: autoReportConfig.leaky_bucket?.max_bucket_capacity || 100,
+                            },
+                          })
+                        }
+                        className="bg-slate-700 border-slate-600 text-white h-8 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-slate-400 text-xs">High Puan</Label>
+                      <Input
+                        type="number"
+                        min={3}
+                        max={20}
+                        value={autoReportConfig.leaky_bucket?.high_points || 8}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            leaky_bucket: {
+                              ...autoReportConfig.leaky_bucket,
+                              high_points: parseFloat(e.target.value) || 8,
+                              critical_points: autoReportConfig.leaky_bucket?.critical_points || 15,
+                              decay_rate: autoReportConfig.leaky_bucket?.decay_rate || 5,
+                              medium_points: autoReportConfig.leaky_bucket?.medium_points || 3,
+                              low_points: autoReportConfig.leaky_bucket?.low_points || 1,
+                              decay_interval_seconds: autoReportConfig.leaky_bucket?.decay_interval_seconds || 10,
+                              max_bucket_capacity: autoReportConfig.leaky_bucket?.max_bucket_capacity || 100,
+                            },
+                          })
+                        }
+                        className="bg-slate-700 border-slate-600 text-white h-8 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-slate-400 text-xs">Medium Puan</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={autoReportConfig.leaky_bucket?.medium_points || 3}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            leaky_bucket: {
+                              ...autoReportConfig.leaky_bucket,
+                              medium_points: parseFloat(e.target.value) || 3,
+                              critical_points: autoReportConfig.leaky_bucket?.critical_points || 15,
+                              high_points: autoReportConfig.leaky_bucket?.high_points || 8,
+                              decay_rate: autoReportConfig.leaky_bucket?.decay_rate || 5,
+                              low_points: autoReportConfig.leaky_bucket?.low_points || 1,
+                              decay_interval_seconds: autoReportConfig.leaky_bucket?.decay_interval_seconds || 10,
+                              max_bucket_capacity: autoReportConfig.leaky_bucket?.max_bucket_capacity || 100,
+                            },
+                          })
+                        }
+                        className="bg-slate-700 border-slate-600 text-white h-8 text-sm"
+                      />
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3 bg-slate-700/50 rounded-lg p-3">
-                  <input
-                    type="checkbox"
-                    checked={autoReportConfig.instant_report_on_critical}
-                    onChange={(e) =>
-                      setAutoReportConfig({
-                        ...autoReportConfig,
-                        instant_report_on_critical: e.target.checked,
-                      })
-                    }
-                    className="h-4 w-4 rounded border-slate-600"
-                  />
-                  <div>
-                    <Label className="text-slate-300">
-                      Kritik Anomalide Anında Rapor
-                    </Label>
-                    <p className="text-xs text-slate-500">
-                      Z-Score &gt; 4 olunca cooldown beklemeden hemen rapor
-                      gönder
-                    </p>
+                {/* Adaptive Threshold Settings */}
+                <div className="space-y-3">
+                  <h4 className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                    📊 Adaptive Threshold Ayarları
+                  </h4>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="space-y-2">
+                      <Label className="text-slate-400 text-xs">Warning Eşiği (puan)</Label>
+                      <Input
+                        type="number"
+                        min={5}
+                        max={50}
+                        value={autoReportConfig.adaptive_threshold?.base_warning_threshold || 20}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            adaptive_threshold: {
+                              ...autoReportConfig.adaptive_threshold,
+                              base_warning_threshold: parseFloat(e.target.value) || 20,
+                              base_critical_threshold: autoReportConfig.adaptive_threshold?.base_critical_threshold || 40,
+                              adaptation_window_minutes: autoReportConfig.adaptive_threshold?.adaptation_window_minutes || 30,
+                              min_samples_for_adaptation: autoReportConfig.adaptive_threshold?.min_samples_for_adaptation || 10,
+                              min_threshold_multiplier: autoReportConfig.adaptive_threshold?.min_threshold_multiplier || 0.5,
+                              max_threshold_multiplier: autoReportConfig.adaptive_threshold?.max_threshold_multiplier || 2.0,
+                              hysteresis_margin: autoReportConfig.adaptive_threshold?.hysteresis_margin || 0.2,
+                            },
+                          })
+                        }
+                        className="bg-slate-700 border-slate-600 text-white h-8 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-slate-400 text-xs">Critical Eşiği (puan)</Label>
+                      <Input
+                        type="number"
+                        min={20}
+                        max={80}
+                        value={autoReportConfig.adaptive_threshold?.base_critical_threshold || 40}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            adaptive_threshold: {
+                              ...autoReportConfig.adaptive_threshold,
+                              base_critical_threshold: parseFloat(e.target.value) || 40,
+                              base_warning_threshold: autoReportConfig.adaptive_threshold?.base_warning_threshold || 20,
+                              adaptation_window_minutes: autoReportConfig.adaptive_threshold?.adaptation_window_minutes || 30,
+                              min_samples_for_adaptation: autoReportConfig.adaptive_threshold?.min_samples_for_adaptation || 10,
+                              min_threshold_multiplier: autoReportConfig.adaptive_threshold?.min_threshold_multiplier || 0.5,
+                              max_threshold_multiplier: autoReportConfig.adaptive_threshold?.max_threshold_multiplier || 2.0,
+                              hysteresis_margin: autoReportConfig.adaptive_threshold?.hysteresis_margin || 0.2,
+                            },
+                          })
+                        }
+                        className="bg-slate-700 border-slate-600 text-white h-8 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-slate-400 text-xs">Hysteresis Marjı (%)</Label>
+                      <Input
+                        type="number"
+                        min={0.1}
+                        max={0.5}
+                        step={0.05}
+                        value={autoReportConfig.adaptive_threshold?.hysteresis_margin || 0.2}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            adaptive_threshold: {
+                              ...autoReportConfig.adaptive_threshold,
+                              hysteresis_margin: parseFloat(e.target.value) || 0.2,
+                              base_warning_threshold: autoReportConfig.adaptive_threshold?.base_warning_threshold || 20,
+                              base_critical_threshold: autoReportConfig.adaptive_threshold?.base_critical_threshold || 40,
+                              adaptation_window_minutes: autoReportConfig.adaptive_threshold?.adaptation_window_minutes || 30,
+                              min_samples_for_adaptation: autoReportConfig.adaptive_threshold?.min_samples_for_adaptation || 10,
+                              min_threshold_multiplier: autoReportConfig.adaptive_threshold?.min_threshold_multiplier || 0.5,
+                              max_threshold_multiplier: autoReportConfig.adaptive_threshold?.max_threshold_multiplier || 2.0,
+                            },
+                          })
+                        }
+                        className="bg-slate-700 border-slate-600 text-white h-8 text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* State Transition Settings */}
+                <div className="space-y-3">
+                  <h4 className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                    🔄 State Transition Ayarları
+                  </h4>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="space-y-2">
+                      <Label className="text-slate-400 text-xs">Warning Cooldown (dk)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={120}
+                        value={autoReportConfig.state_transition?.warning_cooldown_minutes || 15}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            state_transition: {
+                              ...autoReportConfig.state_transition,
+                              warning_cooldown_minutes: parseInt(e.target.value) || 15,
+                              report_on_warning_entry: autoReportConfig.state_transition?.report_on_warning_entry ?? true,
+                              report_on_critical_entry: autoReportConfig.state_transition?.report_on_critical_entry ?? true,
+                              report_on_critical_exit: autoReportConfig.state_transition?.report_on_critical_exit ?? true,
+                              report_on_normal_return: autoReportConfig.state_transition?.report_on_normal_return ?? false,
+                              normal_cooldown_minutes: autoReportConfig.state_transition?.normal_cooldown_minutes || 60,
+                              critical_cooldown_minutes: autoReportConfig.state_transition?.critical_cooldown_minutes || 5,
+                              state_confirmation_seconds: autoReportConfig.state_transition?.state_confirmation_seconds || 30,
+                            },
+                          })
+                        }
+                        className="bg-slate-700 border-slate-600 text-white h-8 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-slate-400 text-xs">Critical Cooldown (dk)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={autoReportConfig.state_transition?.critical_cooldown_minutes || 5}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            state_transition: {
+                              ...autoReportConfig.state_transition,
+                              critical_cooldown_minutes: parseInt(e.target.value) || 5,
+                              report_on_warning_entry: autoReportConfig.state_transition?.report_on_warning_entry ?? true,
+                              report_on_critical_entry: autoReportConfig.state_transition?.report_on_critical_entry ?? true,
+                              report_on_critical_exit: autoReportConfig.state_transition?.report_on_critical_exit ?? true,
+                              report_on_normal_return: autoReportConfig.state_transition?.report_on_normal_return ?? false,
+                              normal_cooldown_minutes: autoReportConfig.state_transition?.normal_cooldown_minutes || 60,
+                              warning_cooldown_minutes: autoReportConfig.state_transition?.warning_cooldown_minutes || 15,
+                              state_confirmation_seconds: autoReportConfig.state_transition?.state_confirmation_seconds || 30,
+                            },
+                          })
+                        }
+                        className="bg-slate-700 border-slate-600 text-white h-8 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-slate-400 text-xs">State Onay Süresi (sn)</Label>
+                      <Input
+                        type="number"
+                        min={5}
+                        max={120}
+                        value={autoReportConfig.state_transition?.state_confirmation_seconds || 30}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            state_transition: {
+                              ...autoReportConfig.state_transition,
+                              state_confirmation_seconds: parseInt(e.target.value) || 30,
+                              report_on_warning_entry: autoReportConfig.state_transition?.report_on_warning_entry ?? true,
+                              report_on_critical_entry: autoReportConfig.state_transition?.report_on_critical_entry ?? true,
+                              report_on_critical_exit: autoReportConfig.state_transition?.report_on_critical_exit ?? true,
+                              report_on_normal_return: autoReportConfig.state_transition?.report_on_normal_return ?? false,
+                              normal_cooldown_minutes: autoReportConfig.state_transition?.normal_cooldown_minutes || 60,
+                              warning_cooldown_minutes: autoReportConfig.state_transition?.warning_cooldown_minutes || 15,
+                              critical_cooldown_minutes: autoReportConfig.state_transition?.critical_cooldown_minutes || 5,
+                            },
+                          })
+                        }
+                        className="bg-slate-700 border-slate-600 text-white h-8 text-sm"
+                      />
+                    </div>
+                  </div>
+                  
+                  {/* Rapor Tetikleme Kuralları */}
+                  <div className="grid grid-cols-2 gap-3 mt-3">
+                    <div className="flex items-center gap-2 bg-slate-700/50 rounded-lg p-2">
+                      <input
+                        type="checkbox"
+                        checked={autoReportConfig.state_transition?.report_on_critical_entry ?? true}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            state_transition: {
+                              ...autoReportConfig.state_transition,
+                              report_on_critical_entry: e.target.checked,
+                              report_on_warning_entry: autoReportConfig.state_transition?.report_on_warning_entry ?? true,
+                              report_on_critical_exit: autoReportConfig.state_transition?.report_on_critical_exit ?? true,
+                              report_on_normal_return: autoReportConfig.state_transition?.report_on_normal_return ?? false,
+                              normal_cooldown_minutes: autoReportConfig.state_transition?.normal_cooldown_minutes || 60,
+                              warning_cooldown_minutes: autoReportConfig.state_transition?.warning_cooldown_minutes || 15,
+                              critical_cooldown_minutes: autoReportConfig.state_transition?.critical_cooldown_minutes || 5,
+                              state_confirmation_seconds: autoReportConfig.state_transition?.state_confirmation_seconds || 30,
+                            },
+                          })
+                        }
+                        className="h-4 w-4 rounded border-slate-600"
+                      />
+                      <Label className="text-slate-300 text-xs">Critical'e girişte rapor</Label>
+                    </div>
+                    <div className="flex items-center gap-2 bg-slate-700/50 rounded-lg p-2">
+                      <input
+                        type="checkbox"
+                        checked={autoReportConfig.state_transition?.report_on_warning_entry ?? true}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            state_transition: {
+                              ...autoReportConfig.state_transition,
+                              report_on_warning_entry: e.target.checked,
+                              report_on_critical_entry: autoReportConfig.state_transition?.report_on_critical_entry ?? true,
+                              report_on_critical_exit: autoReportConfig.state_transition?.report_on_critical_exit ?? true,
+                              report_on_normal_return: autoReportConfig.state_transition?.report_on_normal_return ?? false,
+                              normal_cooldown_minutes: autoReportConfig.state_transition?.normal_cooldown_minutes || 60,
+                              warning_cooldown_minutes: autoReportConfig.state_transition?.warning_cooldown_minutes || 15,
+                              critical_cooldown_minutes: autoReportConfig.state_transition?.critical_cooldown_minutes || 5,
+                              state_confirmation_seconds: autoReportConfig.state_transition?.state_confirmation_seconds || 30,
+                            },
+                          })
+                        }
+                        className="h-4 w-4 rounded border-slate-600"
+                      />
+                      <Label className="text-slate-300 text-xs">Warning'e girişte rapor</Label>
+                    </div>
+                    <div className="flex items-center gap-2 bg-slate-700/50 rounded-lg p-2">
+                      <input
+                        type="checkbox"
+                        checked={autoReportConfig.state_transition?.report_on_critical_exit ?? true}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            state_transition: {
+                              ...autoReportConfig.state_transition,
+                              report_on_critical_exit: e.target.checked,
+                              report_on_warning_entry: autoReportConfig.state_transition?.report_on_warning_entry ?? true,
+                              report_on_critical_entry: autoReportConfig.state_transition?.report_on_critical_entry ?? true,
+                              report_on_normal_return: autoReportConfig.state_transition?.report_on_normal_return ?? false,
+                              normal_cooldown_minutes: autoReportConfig.state_transition?.normal_cooldown_minutes || 60,
+                              warning_cooldown_minutes: autoReportConfig.state_transition?.warning_cooldown_minutes || 15,
+                              critical_cooldown_minutes: autoReportConfig.state_transition?.critical_cooldown_minutes || 5,
+                              state_confirmation_seconds: autoReportConfig.state_transition?.state_confirmation_seconds || 30,
+                            },
+                          })
+                        }
+                        className="h-4 w-4 rounded border-slate-600"
+                      />
+                      <Label className="text-slate-300 text-xs">Critical'den çıkışta rapor</Label>
+                    </div>
+                    <div className="flex items-center gap-2 bg-slate-700/50 rounded-lg p-2">
+                      <input
+                        type="checkbox"
+                        checked={autoReportConfig.state_transition?.report_on_normal_return ?? false}
+                        onChange={(e) =>
+                          setAutoReportConfig({
+                            ...autoReportConfig,
+                            state_transition: {
+                              ...autoReportConfig.state_transition,
+                              report_on_normal_return: e.target.checked,
+                              report_on_warning_entry: autoReportConfig.state_transition?.report_on_warning_entry ?? true,
+                              report_on_critical_entry: autoReportConfig.state_transition?.report_on_critical_entry ?? true,
+                              report_on_critical_exit: autoReportConfig.state_transition?.report_on_critical_exit ?? true,
+                              normal_cooldown_minutes: autoReportConfig.state_transition?.normal_cooldown_minutes || 60,
+                              warning_cooldown_minutes: autoReportConfig.state_transition?.warning_cooldown_minutes || 15,
+                              critical_cooldown_minutes: autoReportConfig.state_transition?.critical_cooldown_minutes || 5,
+                              state_confirmation_seconds: autoReportConfig.state_transition?.state_confirmation_seconds || 30,
+                            },
+                          })
+                        }
+                        className="h-4 w-4 rounded border-slate-600"
+                      />
+                      <Label className="text-slate-300 text-xs">Normal'e dönüşte rapor</Label>
+                    </div>
                   </div>
                 </div>
 

@@ -34,7 +34,7 @@ from anomaly_detector.models import SensorReading, AnomalyResult
 from data_logger import DataLogger
 from llm_analyzer import get_llm_analyzer, configure_llm_analyzer, AnomalyReport
 from email_service import get_email_service, EmailRecipient, SMTPConfig
-from auto_reporter import get_auto_reporter, ReportingConfig
+from auto_reporter import get_auto_reporter, ReportingConfig, SystemState
 
 # Logging yapılandırması
 logging.basicConfig(
@@ -1030,26 +1030,43 @@ async def update_llm_config(request: LLMConfigRequest):
 # ============================================================================
 
 class AutoReportConfigRequest(BaseModel):
-    """Otomatik raporlama yapılandırma isteği"""
+    """Otomatik raporlama yapılandırma isteği - State-Based & Adaptive Threshold"""
     enabled: bool = Field(default=True, description="Otomatik raporlama aktif mi")
-    min_anomalies_for_report: int = Field(default=3, ge=1, le=50, description="Rapor için minimum anomali sayısı")
-    anomaly_window_minutes: int = Field(default=5, ge=1, le=60, description="Değerlendirme penceresi (dakika)")
-    instant_report_on_critical: bool = Field(default=True, description="Kritik anomalide anında rapor")
-    cooldown_minutes: int = Field(default=15, ge=1, le=120, description="Aynı seviye için bekleme süresi")
-    critical_cooldown_minutes: int = Field(default=5, ge=1, le=60, description="Kritik için bekleme süresi")
-    multi_sensor_threshold: int = Field(default=2, ge=2, le=10, description="Çoklu sensör eşiği")
+    anomaly_window_minutes: int = Field(default=10, ge=1, le=60, description="Değerlendirme penceresi (dakika)")
+    multi_sensor_threshold: int = Field(default=3, ge=2, le=10, description="Çoklu sensör eşiği")
+    
+    # Leaky Bucket parametreleri
+    leaky_bucket: Optional[Dict[str, Any]] = Field(default=None, description="Leaky Bucket konfigürasyonu")
+    
+    # Adaptive Threshold parametreleri
+    adaptive_threshold: Optional[Dict[str, Any]] = Field(default=None, description="Adaptive Threshold konfigürasyonu")
+    
+    # State Transition parametreleri
+    state_transition: Optional[Dict[str, Any]] = Field(default=None, description="State Transition konfigürasyonu")
 
 
 @app.get("/api/v1/auto-report/status", tags=["Auto Report"])
 async def get_auto_report_status():
     """
-    Otomatik raporlama durumunu getir
+    Otomatik raporlama durumunu getir (State-Based & Adaptive Threshold)
     
     Returns:
-        Otomatik raporlama durumu ve istatistikleri
+        Sistem durumu, Leaky Bucket skoru, eşik değerleri ve istatistikler
     """
     auto_reporter = get_auto_reporter()
     return auto_reporter.get_stats()
+
+
+@app.get("/api/v1/auto-report/system-status", tags=["Auto Report"])
+async def get_system_status():
+    """
+    Sistem durumu özeti (Frontend için optimize edilmiş)
+    
+    Returns:
+        State, bucket score, thresholds, fill percentage
+    """
+    auto_reporter = get_auto_reporter()
+    return auto_reporter.get_system_status()
 
 
 @app.get("/api/v1/auto-report/config", tags=["Auto Report"])
@@ -1070,7 +1087,7 @@ async def get_auto_report_config():
 @app.put("/api/v1/auto-report/config", tags=["Auto Report"])
 async def update_auto_report_config(request: AutoReportConfigRequest):
     """
-    Otomatik raporlama yapılandırmasını güncelle
+    Otomatik raporlama yapılandırmasını güncelle (State-Based & Adaptive Threshold)
     
     Args:
         request: Yeni yapılandırma
@@ -1080,15 +1097,26 @@ async def update_auto_report_config(request: AutoReportConfigRequest):
     """
     auto_reporter = get_auto_reporter()
     
-    auto_reporter.update_config(
-        enabled=request.enabled,
-        min_anomalies_for_report=request.min_anomalies_for_report,
-        anomaly_window_minutes=request.anomaly_window_minutes,
-        instant_report_on_critical=request.instant_report_on_critical,
-        cooldown_minutes=request.cooldown_minutes,
-        critical_cooldown_minutes=request.critical_cooldown_minutes,
-        multi_sensor_threshold=request.multi_sensor_threshold
-    )
+    # Ana parametreleri güncelle
+    update_kwargs = {
+        "enabled": request.enabled,
+        "anomaly_window_minutes": request.anomaly_window_minutes,
+        "multi_sensor_threshold": request.multi_sensor_threshold
+    }
+    
+    # Leaky Bucket parametreleri
+    if request.leaky_bucket:
+        update_kwargs["leaky_bucket"] = request.leaky_bucket
+    
+    # Adaptive Threshold parametreleri
+    if request.adaptive_threshold:
+        update_kwargs["adaptive_threshold"] = request.adaptive_threshold
+    
+    # State Transition parametreleri
+    if request.state_transition:
+        update_kwargs["state_transition"] = request.state_transition
+    
+    auto_reporter.update_config(**update_kwargs)
     
     # Config dosyasına kaydet
     try:
@@ -1108,7 +1136,8 @@ async def update_auto_report_config(request: AutoReportConfigRequest):
     return {
         "success": True,
         "message": "Otomatik raporlama yapılandırması güncellendi",
-        "config": auto_reporter.config.to_dict()
+        "config": auto_reporter.config.to_dict(),
+        "system_status": auto_reporter.get_system_status()
     }
 
 
@@ -1164,7 +1193,61 @@ async def clear_auto_report_buffer():
     
     return {
         "success": True,
-        "message": "Anomali tamponu temizlendi"
+        "message": "Anomali tamponu temizlendi",
+        "system_status": auto_reporter.get_system_status()
+    }
+
+
+@app.post("/api/v1/auto-report/reset", tags=["Auto Report"])
+async def reset_auto_report():
+    """
+    Otomatik raporlama sistemini tamamen sıfırla
+    
+    Leaky Bucket, state ve istatistikleri sıfırlar.
+    
+    Returns:
+        Başarı durumu
+    """
+    auto_reporter = get_auto_reporter()
+    auto_reporter.reset()
+    
+    return {
+        "success": True,
+        "message": "Otomatik raporlama sistemi sıfırlandı",
+        "system_status": auto_reporter.get_system_status()
+    }
+
+
+@app.post("/api/v1/auto-report/force-state", tags=["Auto Report"])
+async def force_auto_report_state(state: str, reason: str = "Manual override"):
+    """
+    Sistem durumunu zorla değiştir (Debug/Test için)
+    
+    Args:
+        state: Yeni durum (NORMAL, WARNING, CRITICAL)
+        reason: Değişiklik nedeni
+    
+    Returns:
+        Yeni sistem durumu
+    """
+    auto_reporter = get_auto_reporter()
+    
+    state_map = {
+        "NORMAL": SystemState.NORMAL,
+        "WARNING": SystemState.WARNING,
+        "CRITICAL": SystemState.CRITICAL
+    }
+    
+    if state.upper() not in state_map:
+        raise HTTPException(status_code=400, detail=f"Geçersiz state: {state}. NORMAL, WARNING veya CRITICAL olmalı.")
+    
+    auto_reporter.force_state(state_map[state.upper()], reason)
+    
+    return {
+        "success": True,
+        "message": f"Sistem durumu {state.upper()} olarak değiştirildi",
+        "reason": reason,
+        "system_status": auto_reporter.get_system_status()
     }
 
 
@@ -1198,16 +1281,18 @@ async def startup_event():
     else:
         logger.warning("⚠️ E-posta Servisi yapılandırılmamış. SMTP ayarlarını kontrol edin.")
     
-    # Otomatik raporlama sistemini başlat
+    # Otomatik raporlama sistemini başlat (State-Based & Adaptive Threshold)
     auto_reporter = get_auto_reporter()
     auto_reporter.set_report_callback(auto_report_callback)
     
-    logger.info(f"🔄 Otomatik Raporlama: {'✅ Aktif' if auto_reporter.config.enabled else '❌ Devre Dışı'}")
+    logger.info(f"🔄 Otomatik Raporlama v2.0 (State-Based & Adaptive)")
+    logger.info(f"   Durum: {'✅ Aktif' if auto_reporter.config.enabled else '❌ Devre Dışı'}")
     if auto_reporter.config.enabled:
-        logger.info(f"   Min. anomali: {auto_reporter.config.min_anomalies_for_report}")
-        logger.info(f"   Pencere: {auto_reporter.config.anomaly_window_minutes} dk")
-        logger.info(f"   Cooldown: {auto_reporter.config.cooldown_minutes} dk")
-        logger.info(f"   Kritik anında rapor: {auto_reporter.config.instant_report_on_critical}")
+        status = auto_reporter.get_system_status()
+        logger.info(f"   Mevcut State: {status['state']}")
+        logger.info(f"   Warning Threshold: {status['warning_threshold']}")
+        logger.info(f"   Critical Threshold: {status['critical_threshold']}")
+        logger.info(f"   Decay Rate: {status['decay_rate']}/dk")
     
     logger.info(f"📊 API Dokümantasyonu: http://localhost:8000/api/docs")
     logger.info("=" * 70)
@@ -1215,14 +1300,18 @@ async def startup_event():
 
 async def auto_report_callback(anomalies: list, decision):
     """
-    Otomatik rapor callback fonksiyonu
-    Anomali eşiği aşıldığında çağrılır ve rapor oluşturup mail gönderir
+    Otomatik rapor callback fonksiyonu (State-Based & Adaptive Threshold)
+    Durum değişikliğinde çağrılır ve rapor oluşturup mail gönderir
     
     Bu fonksiyon AutoReporter tarafından otomatik olarak çağrılır.
     """
     try:
         logger.warning(f"📧 ================================")
-        logger.warning(f"📧 CALLBACK ÇAĞRILDI!")
+        logger.warning(f"📧 STATE-BASED CALLBACK ÇAĞRILDI!")
+        logger.warning(f"📧 Trigger Type: {decision.trigger_type}")
+        logger.warning(f"📧 State: {decision.previous_state} -> {decision.current_state}")
+        logger.warning(f"📧 Bucket Score: {decision.bucket_score:.1f}")
+        logger.warning(f"📧 Thresholds: W={decision.warning_threshold:.1f}, C={decision.critical_threshold:.1f}")
         logger.warning(f"📧 Anomali sayısı: {len(anomalies)}")
         logger.warning(f"📧 Risk: {decision.risk_level}")
         logger.warning(f"📧 Sebep: {decision.reason}")
@@ -1275,46 +1364,70 @@ async def auto_report_callback(anomalies: list, decision):
                 sensor_summary[sensor]["count"] += 1
                 sensor_summary[sensor]["max_z"] = max(sensor_summary[sensor]["max_z"], abs(a.get("z_score", 0)))
             
-            summary_text = f"Son {len(anomalies)} anomali otomatik olarak tespit edildi.\n\n"
-            summary_text += "Sensör Bazında Özet:\n"
+            # State-based özet
+            state_info = f"""
+📊 State-Based Anomali Raporu
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔄 Durum Değişikliği: {decision.previous_state.value if decision.previous_state else 'N/A'} → {decision.current_state.value}
+📈 Bucket Skoru: {decision.bucket_score:.1f}
+⚠️ Warning Eşiği: {decision.warning_threshold:.1f}
+🚨 Critical Eşiği: {decision.critical_threshold:.1f}
+🎯 Tetikleyici: {decision.trigger_type}
+
+Son {len(anomalies)} anomali analizi:
+"""
+            
             for sensor, data in sensor_summary.items():
-                summary_text += f"- {sensor}: {data['count']} anomali (max Z-Score: {data['max_z']:.2f})\n"
+                state_info += f"  • {sensor}: {data['count']} anomali (max Z-Score: {data['max_z']:.2f})\n"
             
             report = AnomalyReport(
-                report_id=f"AUTO-{now.strftime('%Y%m%d%H%M%S')}",
+                report_id=f"STATE-{now.strftime('%Y%m%d%H%M%S')}",
                 generated_at=now,
-                period_start=now - timedelta(minutes=5),
+                period_start=now - timedelta(minutes=10),
                 period_end=now,
                 total_anomalies=len(anomalies),
                 anomalies=anomalies,
                 affected_sensors=decision.affected_sensors,
                 summary=decision.reason,
                 risk_level=decision.risk_level,
-                llm_analysis=summary_text
+                llm_analysis=state_info
             )
-            logger.warning(f"📝 Basit rapor oluşturuldu: {report.report_id}")
+            logger.warning(f"📝 State-based rapor oluşturuldu: {report.report_id}")
         
         # E-posta gönder
         try:
-            risk_labels = {
-                "CRITICAL": "KRİTİK",
-                "HIGH": "YÜKSEK",
-                "MEDIUM": "ORTA",
-                "LOW": "DÜŞÜK"
+            # State'e göre emoji ve label
+            state_labels = {
+                "CRITICAL": ("🚨", "KRİTİK"),
+                "HIGH": ("⚠️", "YÜKSEK"),
+                "MEDIUM": ("📊", "ORTA"),
+                "LOW": ("ℹ️", "DÜŞÜK")
             }
-            risk_label = risk_labels.get(decision.risk_level, decision.risk_level)
+            emoji, label = state_labels.get(decision.risk_level, ("📊", decision.risk_level))
+            
+            # Trigger type'a göre konu
+            trigger_labels = {
+                "critical_entry": "KRİTİK SEVİYEYE GEÇİŞ",
+                "warning_entry": "UYARI SEVİYESİNE GEÇİŞ",
+                "critical_exit": "Kritik Durumdan Çıkış",
+                "normal_return": "Sistem Normale Döndü"
+            }
+            trigger_label = trigger_labels.get(decision.trigger_type, "Durum Değişikliği")
+            
+            subject = f"{emoji} [{label}] {trigger_label} - {report.report_id}"
             
             logger.warning(f"📧 E-posta gönderiliyor...")
             logger.warning(f"   Alıcılar: {email_service.recipients}")
-            logger.warning(f"   Konu: 🚨 [{risk_label}] Otomatik Anomali Raporu - {report.report_id}")
+            logger.warning(f"   Konu: {subject}")
             
             result = await email_service.send_report(
                 report=report.to_dict(),
-                subject=f"🚨 [{risk_label}] Otomatik Anomali Raporu - {report.report_id}"
+                subject=subject
             )
             
             if result.get("success"):
-                logger.warning(f"✅✅✅ OTOMATİK RAPOR E-POSTASI GÖNDERİLDİ! ✅✅✅")
+                logger.warning(f"✅✅✅ STATE-BASED RAPOR GÖNDERİLDİ! ✅✅✅")
                 logger.warning(f"    Alıcılar: {result.get('recipients')}")
             else:
                 logger.error(f"❌ Rapor e-postası gönderilemedi: {result.get('error')}")
@@ -1323,11 +1436,6 @@ async def auto_report_callback(anomalies: list, decision):
             logger.error(f"❌ E-posta gönderim hatası: {email_error}")
             import traceback
             traceback.print_exc()
-            
-    except Exception as e:
-        logger.error(f"❌ Otomatik rapor callback hatası: {e}")
-        import traceback
-        traceback.print_exc()
             
     except Exception as e:
         logger.error(f"❌ Otomatik rapor callback hatası: {e}")

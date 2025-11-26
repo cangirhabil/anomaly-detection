@@ -34,6 +34,21 @@ auto_reporting:
   working_hours_end: 18
   working_hours_only: false
   working_hours_start: 8
+  # State-Based ve Leaky Bucket parametreleri
+  leaky_bucket:
+    decay_rate: 5.0  # Dakikada 5 puan sızdırma
+    min_score: 0.0   # Minimum skor
+    max_score: 100.0 # Maksimum skor
+  adaptive_threshold:
+    enabled: true
+    base_warning: 10.0      # Temel uyarı eşiği
+    base_critical: 20.0     # Temel kritik eşiği
+    sensitivity_multiplier: 1.0  # Hassasiyet çarpanı
+    history_window_minutes: 30   # Geçmiş penceresi (dakika)
+  state_transition:
+    report_on_upgrade: true    # Durum yükseldiğinde rapor
+    report_on_downgrade: false # Durum düştüğünde rapor
+    min_time_in_state: 60      # Minimum durum süresi (saniye)
 cors:
   allow_methods:
   - GET
