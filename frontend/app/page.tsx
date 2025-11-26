@@ -565,7 +565,7 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           api_key: geminiApiKey,
-          model_name: 'gemini-2.5-flash-preview-05-20'
+          model_name: 'gemini-2.5-flash'
         }),
       });
       if (response.ok) {
@@ -1807,7 +1807,7 @@ export default function Dashboard() {
                   <div className="space-y-2">
                     <Label className="text-slate-300">Model</Label>
                     <Input 
-                      value="gemini-2.5-flash-preview-05-20"
+                      value="gemini-2.5-flash"
                       disabled
                       className="bg-slate-700/50 border-slate-600 text-slate-400"
                     />
